@@ -157,17 +157,27 @@ def classify_peaks(
     window_power: np.ndarray,
     baseline: float,
     max_window_peaks: int = 50,
+    window_power_threshold: float = 0.01,
+    relative_tolerance: float = 0.01,
 ) -> None:
     window_indices, _ = find_peaks(window_power)
     if len(window_indices) == 0:
         return
-    ranked = window_indices[np.argsort(window_power[window_indices])[::-1]][:max_window_peaks]
+    ranked_all = window_indices[np.argsort(window_power[window_indices])[::-1]]
+    ranked = [idx for idx in ranked_all if window_power[idx] >= window_power_threshold][:max_window_peaks]
+    if not ranked:
+        return
+    ranked = np.asarray(ranked)
     resolution = 1.0 / baseline
-    tolerance = max(2.0 * np.median(np.diff(frequency)), resolution)
+    grid_tolerance = max(2.0 * np.median(np.diff(frequency)), resolution)
     for peak in peaks:
         distances = np.abs(frequency[ranked] - peak.frequency)
         nearest = int(ranked[int(np.argmin(distances))])
-        if abs(frequency[nearest] - peak.frequency) <= tolerance and window_power[nearest] >= 0.01:
+        freq_delta = abs(frequency[nearest] - peak.frequency)
+        period_delta = abs((1.0 / frequency[nearest]) - peak.period)
+        freq_tolerance = max(grid_tolerance, relative_tolerance * peak.frequency)
+        period_tolerance = relative_tolerance * peak.period
+        if freq_delta <= freq_tolerance or period_delta <= period_tolerance:
             peak.kind = "sampling-window artefact"
             peak.window_frequency = float(frequency[nearest])
             peak.window_period = float(1.0 / frequency[nearest])
@@ -255,6 +265,7 @@ def add_harmonic_and_window_peaks(
     primary: PeakSummary | None,
     min_considered_period: float,
     max_window_peaks: int = 4,
+    window_power_threshold: float = 0.01,
 ) -> None:
     if primary is not None:
         harmonic = local_lomb_peak(frequency, power, ls, 2.0 * primary.frequency, fractional_width=0.04)
@@ -267,7 +278,7 @@ def add_harmonic_and_window_peaks(
     ranked = window_indices[np.argsort(window_power[window_indices])[::-1]]
     added = 0
     for idx in ranked:
-        if window_power[idx] < 0.01:
+        if window_power[idx] < window_power_threshold:
             continue
         target_frequency = float(frequency[idx])
         target_period = float(1.0 / target_frequency)
@@ -462,6 +473,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     samples_per_peak = float(fields.get("samples_per_peak", "10"))
     max_peaks = int(fields.get("max_peaks", "6"))
     min_considered_period = float(fields.get("min_considered_period", fields.get("min_marked_period", "2.0")))
+    window_artifact_power = float(fields.get("window_artifact_power", "0.01"))
+    window_artifact_tolerance = float(fields.get("window_artifact_tolerance", "0.01"))
     n_bootstrap = int(fields.get("n_bootstrap", "1000"))
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
     include_harmonic = fields.get("include_harmonic", "on") == "on"
@@ -474,15 +487,44 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     freq = frequency_grid(t, fmin, fmax, samples_per_peak)
     power, ls, peaks = find_lomb_scargle_peaks(t, y_analysis, dy, freq, max_peaks, min_considered_period=min_considered_period)
     win = spectral_window(t, freq)
-    classify_peaks(peaks, freq, win, float(t.max() - t.min()))
+    classify_peaks(
+        peaks,
+        freq,
+        win,
+        float(t.max() - t.min()),
+        window_power_threshold=window_artifact_power,
+        relative_tolerance=window_artifact_tolerance,
+    )
     candidate_peaks = [p for p in peaks if "artefact" not in p.kind]
     primary = candidate_peaks[0] if candidate_peaks else (peaks[0] if peaks else None)
-    add_harmonic_and_window_peaks(peaks, freq, power, ls, win, primary, min_considered_period)
+    add_harmonic_and_window_peaks(
+        peaks,
+        freq,
+        power,
+        ls,
+        win,
+        primary,
+        min_considered_period,
+        window_power_threshold=window_artifact_power,
+    )
+    classify_peaks(
+        peaks,
+        freq,
+        win,
+        float(t.max() - t.min()),
+        window_power_threshold=window_artifact_power,
+        relative_tolerance=window_artifact_tolerance,
+    )
     peaks.sort(key=lambda peak: peak.power, reverse=True)
     add_bootstrap_errors(t, y_analysis, dy, ls, peaks, n_bootstrap, bootstrap_width, 1200, seed=12345)
 
     candidate_peaks = [p for p in peaks if "artefact" not in p.kind]
-    primary = candidate_peaks[0] if candidate_peaks else peaks[0]
+    if not candidate_peaks:
+        raise ValueError(
+            "No non-window candidate peak remains after sampling-window filtering. "
+            "Try lowering the frequency range or increasing the sampling-window artefact threshold."
+        )
+    primary = candidate_peaks[0]
     remove_freqs = [primary.frequency]
     if include_harmonic:
         remove_freqs.append(2.0 * primary.frequency)
@@ -491,10 +533,34 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     residual_power, residual_ls, residual_peaks = find_lomb_scargle_peaks(
         t, residuals, dy, freq, max_peaks, min_considered_period=min_considered_period
     )
-    classify_peaks(residual_peaks, freq, win, float(t.max() - t.min()))
+    classify_peaks(
+        residual_peaks,
+        freq,
+        win,
+        float(t.max() - t.min()),
+        window_power_threshold=window_artifact_power,
+        relative_tolerance=window_artifact_tolerance,
+    )
     residual_candidate_peaks = [p for p in residual_peaks if "artefact" not in p.kind]
     residual_primary = residual_candidate_peaks[0] if residual_candidate_peaks else (residual_peaks[0] if residual_peaks else None)
-    add_harmonic_and_window_peaks(residual_peaks, freq, residual_power, residual_ls, win, residual_primary, min_considered_period)
+    add_harmonic_and_window_peaks(
+        residual_peaks,
+        freq,
+        residual_power,
+        residual_ls,
+        win,
+        residual_primary,
+        min_considered_period,
+        window_power_threshold=window_artifact_power,
+    )
+    classify_peaks(
+        residual_peaks,
+        freq,
+        win,
+        float(t.max() - t.min()),
+        window_power_threshold=window_artifact_power,
+        relative_tolerance=window_artifact_tolerance,
+    )
     residual_peaks.sort(key=lambda peak: peak.power, reverse=True)
 
     folded = folded_profile(t, y, dy, primary.period, t0, fold_bins, 2 if include_harmonic else 1)

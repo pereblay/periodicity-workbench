@@ -176,6 +176,22 @@ with st.sidebar:
     samples_per_peak = st.number_input("Samples per peak", min_value=1.0, value=10.0, step=1.0)
     max_peaks = st.number_input("Max considered peaks", min_value=1, max_value=20, value=6, step=1)
     min_considered_period = st.number_input("Minimum considered period [d]", min_value=0.0, value=2.0, step=0.1)
+    window_artifact_power = st.number_input(
+        "Sampling-window artefact threshold",
+        min_value=0.0,
+        value=0.01,
+        step=0.005,
+        format="%.4f",
+        help="Lomb-Scargle peaks close to sampling-window peaks stronger than this are excluded from primary-period selection.",
+    )
+    window_artifact_tolerance = st.number_input(
+        "Sampling-window match tolerance",
+        min_value=0.001,
+        value=0.01,
+        step=0.001,
+        format="%.3f",
+        help="Relative tolerance in period/frequency for considering a peak close to a sampling-window feature.",
+    )
 
     st.subheader("Uncertainty")
     n_bootstrap = st.number_input("Bootstrap iterations", min_value=0, value=1000, step=50)
@@ -208,6 +224,8 @@ if run:
         "samples_per_peak": str(samples_per_peak),
         "max_peaks": str(max_peaks),
         "min_considered_period": str(min_considered_period),
+        "window_artifact_power": str(window_artifact_power),
+        "window_artifact_tolerance": str(window_artifact_tolerance),
         "n_bootstrap": str(n_bootstrap),
         "bootstrap_width": str(bootstrap_width),
         "fold_bins": str(fold_bins),
