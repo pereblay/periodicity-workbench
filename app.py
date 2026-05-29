@@ -353,7 +353,7 @@ def folded_profile(
     period: float,
     t0: float,
     n_bins: int,
-    frequencies_in_phase: int,
+    phase_frequency_ratios: list[float],
 ) -> dict:
     phase = ((t - t0) / period) % 1.0
     weights = 1.0 / dy**2
@@ -374,16 +374,16 @@ def folded_profile(
     counts = np.asarray(counts)
 
     cols = [np.ones_like(centers)]
-    for k in range(1, frequencies_in_phase + 1):
-        cols.extend([np.cos(2.0 * np.pi * k * centers), np.sin(2.0 * np.pi * k * centers)])
+    for ratio in phase_frequency_ratios:
+        cols.extend([np.cos(2.0 * np.pi * ratio * centers), np.sin(2.0 * np.pi * ratio * centers)])
     design = np.column_stack(cols)
     wbin = 1.0 / errors**2
     coeff, *_ = np.linalg.lstsq(design * np.sqrt(wbin)[:, None], means * np.sqrt(wbin), rcond=None)
 
     def model(ph: np.ndarray) -> np.ndarray:
         cols_model = [np.ones_like(ph)]
-        for k in range(1, frequencies_in_phase + 1):
-            cols_model.extend([np.cos(2.0 * np.pi * k * ph), np.sin(2.0 * np.pi * k * ph)])
+        for ratio in phase_frequency_ratios:
+            cols_model.extend([np.cos(2.0 * np.pi * ratio * ph), np.sin(2.0 * np.pi * ratio * ph)])
         return np.column_stack(cols_model) @ coeff
 
     grid = np.linspace(0.0, 1.0, 50001, endpoint=False)
@@ -406,7 +406,37 @@ def folded_profile(
         "model_phase": np.linspace(0.0, 2.0, 1000),
         "model_flux": model(np.linspace(0.0, 2.0, 1000) % 1.0),
         "maxima": maxima,
+        "phase_frequency_ratios": phase_frequency_ratios,
     }
+
+
+def parse_period_list(text: str) -> list[float]:
+    periods: list[float] = []
+    for item in re.split(r"[,;\\s]+", text.strip()):
+        if not item:
+            continue
+        period = float(item)
+        if period <= 0:
+            raise ValueError("Folded-fit periods must be positive")
+        periods.append(period)
+    return periods
+
+
+def folded_fit_ratios(primary_period: float, fields: dict[str, str]) -> tuple[list[float], list[float]]:
+    mode = fields.get("fold_fit_mode", "harmonics")
+    if mode == "selected":
+        periods = parse_period_list(fields.get("fold_fit_periods", ""))
+        if not periods:
+            periods = [primary_period]
+        ratios = [primary_period / period for period in periods]
+        return ratios, periods
+
+    n_harmonics = int(fields.get("fold_fit_harmonics", "2"))
+    if n_harmonics < 1:
+        raise ValueError("Number of folded-fit harmonics must be at least 1")
+    ratios = [float(k) for k in range(1, n_harmonics + 1)]
+    periods = [primary_period / k for k in range(1, n_harmonics + 1)]
+    return ratios, periods
 
 
 def fig_to_data_uri(fig) -> str:
@@ -563,7 +593,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     )
     residual_peaks.sort(key=lambda peak: peak.power, reverse=True)
 
-    folded = folded_profile(t, y, dy, primary.period, t0, fold_bins, 2 if include_harmonic else 1)
+    fit_ratios, fit_periods = folded_fit_ratios(primary.period, fields)
+    folded = folded_profile(t, y, dy, primary.period, t0, fold_bins, fit_ratios)
     period = 1.0 / freq
     return {
         "n_points": len(t),
@@ -573,6 +604,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "peaks": [asdict(p) for p in peaks],
         "residual_peaks": [asdict(p) for p in residual_peaks],
         "folded_maxima": [{"phase": ph, "flux": val} for ph, val in folded["maxima"]],
+        "fold_fit_periods": fit_periods,
+        "fold_fit_ratios": fit_ratios,
         "series": {
             "period": period.tolist(),
             "frequency": freq.tolist(),

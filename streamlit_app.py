@@ -33,6 +33,19 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def period_options_from_result(result: dict | None) -> dict[str, float]:
+    if result is None:
+        return {}
+    options: dict[str, float] = {}
+    for group_name, key in [("detected", "peaks"), ("prewhitened", "residual_peaks")]:
+        for peak in result.get(key, []):
+            if "artefact" in peak["kind"]:
+                continue
+            label = f"{group_name}: {peak['label']} - {peak['period']:.4f} d ({peak['kind']})"
+            options[label] = float(peak["period"])
+    return options
+
+
 def add_peak_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") -> None:
     for peak in peaks:
         color = "#b13b32" if "artefact" in peak["kind"] else "#2457a6"
@@ -201,6 +214,42 @@ with st.sidebar:
     fold_bins = st.number_input("Phase bins", min_value=4, max_value=80, value=10, step=1)
     t0_text = st.text_input("T0 / MJD", value="", placeholder="first data point")
     include_harmonic = st.checkbox("Include first harmonic", value=True)
+    fold_fit_mode = st.radio(
+        "Folded-fit frequencies",
+        ["Harmonics of primary", "Selected periods"],
+        horizontal=False,
+    )
+    if fold_fit_mode == "Harmonics of primary":
+        fold_fit_harmonics = st.number_input(
+            "Number of harmonics in folded fit",
+            min_value=1,
+            max_value=8,
+            value=2 if include_harmonic else 1,
+            step=1,
+        )
+        selected_period_values: list[float] = []
+    else:
+        previous_options = period_options_from_result(st.session_state.get("last_result"))
+        selected_labels = st.multiselect(
+            "Use periods from previous detected/prewhitened peaks",
+            options=list(previous_options.keys()),
+            default=[],
+            help="Run once to populate this list, then select periods and run again.",
+        )
+        selected_period_values = [previous_options[label] for label in selected_labels]
+        manual_periods = st.text_input(
+            "Additional periods [d]",
+            value="",
+            placeholder="e.g. 19.13, 9.56",
+            help="Comma, semicolon, or whitespace separated.",
+        )
+        if manual_periods.strip():
+            selected_period_values.extend(
+                float(value)
+                for value in manual_periods.replace(",", " ").replace(";", " ").split()
+                if value.strip()
+            )
+        fold_fit_harmonics = 1
 
     run = st.button("Run analysis", type="primary", use_container_width=True)
 
@@ -229,7 +278,11 @@ if run:
         "n_bootstrap": str(n_bootstrap),
         "bootstrap_width": str(bootstrap_width),
         "fold_bins": str(fold_bins),
+        "fold_fit_mode": "selected" if fold_fit_mode == "Selected periods" else "harmonics",
+        "fold_fit_harmonics": str(fold_fit_harmonics),
     }
+    if selected_period_values:
+        fields["fold_fit_periods"] = ",".join(f"{period:.12g}" for period in selected_period_values)
     if t0_text.strip():
         fields["t0"] = t0_text.strip()
     if include_harmonic:
@@ -241,6 +294,7 @@ if run:
         except Exception as exc:
             st.error(str(exc))
             st.stop()
+    st.session_state["last_result"] = result
 
     metric_cols = st.columns(4)
     metric_cols[0].metric("Rows used", f"{result['n_points']}")
@@ -266,5 +320,17 @@ if run:
 
     st.subheader("Folded-profile maxima")
     st.dataframe(pd.DataFrame(result["folded_maxima"]), use_container_width=True, hide_index=True)
+
+    st.subheader("Folded-fit periods")
+    st.dataframe(
+        pd.DataFrame(
+            {
+                "period_d": result["fold_fit_periods"],
+                "frequency_ratio_in_folded_phase": result["fold_fit_ratios"],
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
 else:
     st.info("Upload a light curve and press Run analysis. For exploration, use 50-200 bootstrap iterations; use 1000 for final numbers.")
