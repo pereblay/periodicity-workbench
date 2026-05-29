@@ -251,9 +251,6 @@ def render_results(result: dict) -> None:
     st.subheader("After prewhitening")
     st.dataframe(peaks_dataframe(result["residual_peaks"]), use_container_width=True, hide_index=True)
 
-    st.subheader("Sampling-window peaks")
-    st.dataframe(window_peaks_dataframe(result.get("window_peaks", [])), use_container_width=True, hide_index=True)
-
     st.subheader("Prewhitening terms")
     st.dataframe(pd.DataFrame(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
 

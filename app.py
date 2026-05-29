@@ -276,7 +276,7 @@ def find_lomb_scargle_peaks(
         f = float(frequency[idx])
         pwr = float(power[idx])
         fap = float(ls.false_alarm_probability(pwr))
-        peaks.append(PeakSummary(f"peak {n}", f, float(1.0 / f), pwr, fap, "data candidate"))
+        peaks.append(PeakSummary(f"peak {n}", f, float(1.0 / f), pwr, fap, "candidate"))
     return power, ls, peaks
 
 
@@ -298,7 +298,7 @@ def local_lomb_peak(
         return None
     f = float(frequency[idx])
     pwr = float(power[idx])
-    return PeakSummary("local peak", f, float(1.0 / f), pwr, float(ls.false_alarm_probability(pwr)), "data candidate")
+    return PeakSummary("local peak", f, float(1.0 / f), pwr, float(ls.false_alarm_probability(pwr)), "candidate")
 
 
 def append_unique_peak(peaks: list[PeakSummary], peak: PeakSummary | None, label: str, kind: str, tolerance: float = 0.02) -> None:
@@ -333,7 +333,7 @@ def add_harmonic_and_window_peaks(
     if primary is not None:
         harmonic = local_lomb_peak(frequency, power, ls, 2.0 * primary.frequency, fractional_width=0.04)
         if harmonic is not None and harmonic.period >= min_considered_period and harmonic.fap <= 0.2:
-            append_unique_peak(peaks, harmonic, "P/2 harmonic", "data candidate")
+            append_unique_peak(peaks, harmonic, "P/2 harmonic", "candidate")
 
 
 def add_bootstrap_errors(
