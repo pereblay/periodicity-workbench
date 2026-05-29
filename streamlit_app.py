@@ -62,8 +62,8 @@ with st.sidebar:
     fmin = st.number_input("Min frequency [cycles/day]", min_value=0.0, value=0.01, step=0.001, format="%.6f")
     fmax = st.number_input("Max frequency [cycles/day]", min_value=0.0, value=1.0, step=0.01, format="%.6f")
     samples_per_peak = st.number_input("Samples per peak", min_value=1.0, value=10.0, step=1.0)
-    max_peaks = st.number_input("Max marked peaks", min_value=1, max_value=20, value=6, step=1)
-    min_marked_period = st.number_input("Minimum marked period [d]", min_value=0.0, value=2.0, step=0.1)
+    max_peaks = st.number_input("Max considered peaks", min_value=1, max_value=20, value=6, step=1)
+    min_considered_period = st.number_input("Minimum considered period [d]", min_value=0.0, value=2.0, step=0.1)
 
     st.subheader("Uncertainty")
     n_bootstrap = st.number_input("Bootstrap iterations", min_value=0, value=1000, step=50)
@@ -95,7 +95,7 @@ if run:
         "fmax": str(fmax),
         "samples_per_peak": str(samples_per_peak),
         "max_peaks": str(max_peaks),
-        "min_marked_period": str(min_marked_period),
+        "min_considered_period": str(min_considered_period),
         "n_bootstrap": str(n_bootstrap),
         "bootstrap_width": str(bootstrap_width),
         "fold_bins": str(fold_bins),

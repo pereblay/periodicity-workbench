@@ -180,7 +180,7 @@ def find_lomb_scargle_peaks(
     dy: np.ndarray,
     frequency: np.ndarray,
     max_peaks: int,
-    min_marked_period: float = 2.0,
+    min_considered_period: float = 2.0,
     min_period_separation: float = 0.03,
 ) -> tuple[np.ndarray, LombScargle, list[PeakSummary]]:
     ls = LombScargle(t, y, dy, center_data=True, fit_mean=True)
@@ -192,7 +192,7 @@ def find_lomb_scargle_peaks(
     selected: list[int] = []
     for idx in ranked_all:
         period = float(1.0 / frequency[idx])
-        if period < min_marked_period:
+        if period < min_considered_period:
             continue
         if any(abs(period - 1.0 / frequency[old]) < min_period_separation * max(period, 1.0 / frequency[old]) for old in selected):
             continue
@@ -253,12 +253,12 @@ def add_harmonic_and_window_peaks(
     ls: LombScargle,
     window_power: np.ndarray,
     primary: PeakSummary | None,
-    min_marked_period: float,
+    min_considered_period: float,
     max_window_peaks: int = 4,
 ) -> None:
     if primary is not None:
         harmonic = local_lomb_peak(frequency, power, ls, 2.0 * primary.frequency, fractional_width=0.04)
-        if harmonic is not None and harmonic.period >= min_marked_period and harmonic.fap <= 0.2:
+        if harmonic is not None and harmonic.period >= min_considered_period and harmonic.fap <= 0.2:
             append_unique_peak(peaks, harmonic, "P/2 harmonic", "data candidate")
 
     window_indices, _ = find_peaks(window_power)
@@ -271,7 +271,7 @@ def add_harmonic_and_window_peaks(
             continue
         target_frequency = float(frequency[idx])
         target_period = float(1.0 / target_frequency)
-        if target_period < min_marked_period:
+        if target_period < min_considered_period:
             continue
         peak = local_lomb_peak(frequency, power, ls, target_frequency, fractional_width=0.025)
         if peak is None:
@@ -461,7 +461,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     fmax = float(fields.get("fmax", "1.0"))
     samples_per_peak = float(fields.get("samples_per_peak", "10"))
     max_peaks = int(fields.get("max_peaks", "6"))
-    min_marked_period = float(fields.get("min_marked_period", "2.0"))
+    min_considered_period = float(fields.get("min_considered_period", fields.get("min_marked_period", "2.0")))
     n_bootstrap = int(fields.get("n_bootstrap", "1000"))
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
     include_harmonic = fields.get("include_harmonic", "on") == "on"
@@ -472,12 +472,12 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     t0 = float(t0_raw) if t0_raw else float(t[0])
 
     freq = frequency_grid(t, fmin, fmax, samples_per_peak)
-    power, ls, peaks = find_lomb_scargle_peaks(t, y_analysis, dy, freq, max_peaks, min_marked_period=min_marked_period)
+    power, ls, peaks = find_lomb_scargle_peaks(t, y_analysis, dy, freq, max_peaks, min_considered_period=min_considered_period)
     win = spectral_window(t, freq)
     classify_peaks(peaks, freq, win, float(t.max() - t.min()))
     candidate_peaks = [p for p in peaks if "artefact" not in p.kind]
     primary = candidate_peaks[0] if candidate_peaks else (peaks[0] if peaks else None)
-    add_harmonic_and_window_peaks(peaks, freq, power, ls, win, primary, min_marked_period)
+    add_harmonic_and_window_peaks(peaks, freq, power, ls, win, primary, min_considered_period)
     peaks.sort(key=lambda peak: peak.power, reverse=True)
     add_bootstrap_errors(t, y_analysis, dy, ls, peaks, n_bootstrap, bootstrap_width, 1200, seed=12345)
 
@@ -489,12 +489,12 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     prewhiten_model, _ = fit_sinusoids(t, y_analysis, dy, remove_freqs)
     residuals = y_analysis - prewhiten_model
     residual_power, residual_ls, residual_peaks = find_lomb_scargle_peaks(
-        t, residuals, dy, freq, max_peaks, min_marked_period=min_marked_period
+        t, residuals, dy, freq, max_peaks, min_considered_period=min_considered_period
     )
     classify_peaks(residual_peaks, freq, win, float(t.max() - t.min()))
     residual_candidate_peaks = [p for p in residual_peaks if "artefact" not in p.kind]
     residual_primary = residual_candidate_peaks[0] if residual_candidate_peaks else (residual_peaks[0] if residual_peaks else None)
-    add_harmonic_and_window_peaks(residual_peaks, freq, residual_power, residual_ls, win, residual_primary, min_marked_period)
+    add_harmonic_and_window_peaks(residual_peaks, freq, residual_power, residual_ls, win, residual_primary, min_considered_period)
     residual_peaks.sort(key=lambda peak: peak.power, reverse=True)
 
     folded = folded_profile(t, y, dy, primary.period, t0, fold_bins, 2 if include_harmonic else 1)
