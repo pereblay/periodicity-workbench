@@ -681,7 +681,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     include_harmonic = fields.get("include_harmonic", "on") == "on"
     fold_bins = int(fields.get("fold_bins", "10"))
     t, y, dy = read_columns(file_bytes, filename, time_col, flux_col, error_col)
-    y_analysis = y - weighted_median(y, 1.0 / dy**2)
+    y_offset = weighted_median(y, 1.0 / dy**2)
+    y_analysis = y - y_offset
     t0_raw = fields.get("t0", "").strip()
     t0 = float(t0_raw) if t0_raw else float(t[0])
 
@@ -796,6 +797,10 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             "power": power.tolist(),
             "window_power": win.tolist(),
             "residual_power": residual_power.tolist(),
+            "time": t.tolist(),
+            "flux": y.tolist(),
+            "error": dy.tolist(),
+            "prewhitening_model_flux": (prewhiten_model + y_offset).tolist(),
             "fold_phase": folded["phase"].tolist(),
             "fold_flux": folded["flux"].tolist(),
             "fold_error": folded["error"].tolist(),

@@ -228,6 +228,40 @@ def folded_figure(result: dict) -> go.Figure:
     return fig
 
 
+def prewhitening_model_figure(result: dict) -> go.Figure:
+    series = result["series"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=series["time"],
+            y=series["flux"],
+            error_y=dict(type="data", array=series["error"], visible=True),
+            mode="markers",
+            marker=dict(color="#20242a", size=5),
+            name="Original data",
+            hovertemplate="Time=%{x:.5f}<br>Flux=%{y:.6g}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=series["time"],
+            y=series["prewhitening_model_flux"],
+            mode="lines",
+            line=dict(color="#2457a6", width=2),
+            name="Prewhitening model",
+            hovertemplate="Time=%{x:.5f}<br>Model=%{y:.6g}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Original light curve with prewhitening model",
+        xaxis_title="Time",
+        yaxis_title="Flux",
+        height=430,
+        margin=dict(l=20, r=20, t=50, b=20),
+    )
+    return fig
+
+
 def render_results(result: dict) -> None:
     metric_cols = st.columns(4)
     metric_cols[0].metric("Rows used", f"{result['n_points']}")
@@ -244,6 +278,9 @@ def render_results(result: dict) -> None:
         st.plotly_chart(periodogram_figure(result, "residual_power", "After prewhitening", "residual_peaks"), use_container_width=True)
     with plot_cols[1]:
         st.plotly_chart(folded_figure(result), use_container_width=True)
+
+    if st.session_state.get("show_prewhitening_model"):
+        st.plotly_chart(prewhitening_model_figure(result), use_container_width=True)
 
     st.subheader("Detected peaks")
     st.dataframe(peaks_dataframe(result["peaks"]), use_container_width=True, hide_index=True)
@@ -400,6 +437,12 @@ with st.sidebar:
     if excluded_period_values:
         st.caption("Excluded periods: " + ", ".join(f"{period:.4f} d" for period in excluded_period_values))
 
+    apply_exclusions = st.button(
+        "Apply exclusions",
+        use_container_width=True,
+        help="Re-select the primary period using the last uploaded file and the current manual exclusions. Bootstrap is skipped for this quick update.",
+    )
+
     st.subheader("Iterative Prewhitening")
     if "prewhitening_periods" not in st.session_state:
         st.session_state["prewhitening_periods"] = []
@@ -425,13 +468,13 @@ with st.sidebar:
         use_container_width=True,
         help="Add the selected period and recompute the residual periodogram. Detected harmonics are included only when they appear as non-artefact peaks.",
     )
+    show_model = st.button(
+        "Show model",
+        use_container_width=True,
+        help="Show the model fitted to the original light curve using all periods accumulated in the prewhitening table.",
+    )
     clear_prewhitening = st.button("Clear prewhitening chain", use_container_width=True)
 
-    apply_exclusions = st.button(
-        "Apply exclusions",
-        use_container_width=True,
-        help="Re-select the primary period using the last uploaded file and the current manual exclusions. Bootstrap is skipped for this quick update.",
-    )
     run = st.button("Run analysis", type="primary", use_container_width=True)
 
 
@@ -520,12 +563,20 @@ if next_prewhitening:
     st.rerun()
 
 
+if show_model:
+    if "last_result" not in st.session_state:
+        st.error("Run an analysis before showing the model.")
+        st.stop()
+    st.session_state["show_prewhitening_model"] = True
+
+
 if (
     "last_file_bytes" in st.session_state
     and not run
     and not apply_exclusions
     and not next_prewhitening
     and not clear_prewhitening
+    and not show_model
 ):
     live_signature = current_live_signature()
     previous_signature = st.session_state.get("last_live_signature")
