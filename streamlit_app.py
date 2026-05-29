@@ -172,6 +172,45 @@ def folded_figure(result: dict) -> go.Figure:
     return fig
 
 
+def render_results(result: dict) -> None:
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Rows used", f"{result['n_points']}")
+    metric_cols[1].metric("Baseline", f"{result['baseline']:.1f} d")
+    metric_cols[2].metric("Primary period", f"{result['primary_period']:.4f} d")
+    metric_cols[3].metric("T0", f"{result['t0']:.4f}")
+
+    plot_cols = st.columns(2)
+    with plot_cols[0]:
+        st.plotly_chart(periodogram_figure(result, "power", "Lomb-Scargle periodogram", "peaks"), use_container_width=True)
+    with plot_cols[1]:
+        st.plotly_chart(window_figure(result), use_container_width=True)
+    with plot_cols[0]:
+        st.plotly_chart(periodogram_figure(result, "residual_power", "After prewhitening", "residual_peaks"), use_container_width=True)
+    with plot_cols[1]:
+        st.plotly_chart(folded_figure(result), use_container_width=True)
+
+    st.subheader("Detected peaks")
+    st.dataframe(peaks_dataframe(result["peaks"]), use_container_width=True, hide_index=True)
+
+    st.subheader("After prewhitening")
+    st.dataframe(peaks_dataframe(result["residual_peaks"]), use_container_width=True, hide_index=True)
+
+    st.subheader("Folded-profile maxima")
+    st.dataframe(pd.DataFrame(result["folded_maxima"]), use_container_width=True, hide_index=True)
+
+    st.subheader("Folded-fit periods")
+    st.dataframe(
+        pd.DataFrame(
+            {
+                "period_d": result["fold_fit_periods"],
+                "frequency_ratio_in_folded_phase": result["fold_fit_ratios"],
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 st.title("Periodicity Workbench")
 st.caption("Lomb-Scargle, sampling-window checks, bootstrap errors, prewhitening, and folded profiles.")
 
@@ -321,41 +360,9 @@ if run:
             st.stop()
     st.session_state["last_result"] = result
 
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("Rows used", f"{result['n_points']}")
-    metric_cols[1].metric("Baseline", f"{result['baseline']:.1f} d")
-    metric_cols[2].metric("Primary period", f"{result['primary_period']:.4f} d")
-    metric_cols[3].metric("T0", f"{result['t0']:.4f}")
-
-    plot_cols = st.columns(2)
-    with plot_cols[0]:
-        st.plotly_chart(periodogram_figure(result, "power", "Lomb-Scargle periodogram", "peaks"), use_container_width=True)
-    with plot_cols[1]:
-        st.plotly_chart(window_figure(result), use_container_width=True)
-    with plot_cols[0]:
-        st.plotly_chart(periodogram_figure(result, "residual_power", "After prewhitening", "residual_peaks"), use_container_width=True)
-    with plot_cols[1]:
-        st.plotly_chart(folded_figure(result), use_container_width=True)
-
-    st.subheader("Detected peaks")
-    st.dataframe(peaks_dataframe(result["peaks"]), use_container_width=True, hide_index=True)
-
-    st.subheader("After prewhitening")
-    st.dataframe(peaks_dataframe(result["residual_peaks"]), use_container_width=True, hide_index=True)
-
-    st.subheader("Folded-profile maxima")
-    st.dataframe(pd.DataFrame(result["folded_maxima"]), use_container_width=True, hide_index=True)
-
-    st.subheader("Folded-fit periods")
-    st.dataframe(
-        pd.DataFrame(
-            {
-                "period_d": result["fold_fit_periods"],
-                "frequency_ratio_in_folded_phase": result["fold_fit_ratios"],
-            }
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
+if "last_result" in st.session_state:
+    if not run:
+        st.caption("Showing the last completed analysis. Press Run analysis to apply the current settings.")
+    render_results(st.session_state["last_result"])
 else:
     st.info("Upload a light curve and press Run analysis. For exploration, use 50-200 bootstrap iterations; use 1000 for final numbers.")
