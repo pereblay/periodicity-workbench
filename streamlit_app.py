@@ -25,7 +25,7 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
                 "frequency_c_d": peak["frequency"],
                 "frequency_err_c_d": peak["frequency_error"],
                 "power": peak["power"],
-                "FAP": peak["fap"],
+                "FAP": f"{float(peak['fap']):.5f}",
                 "type": peak["kind"],
                 "window_period_d": peak["window_period"],
             }
@@ -53,9 +53,37 @@ def unique_periods(periods: list[float], tolerance: float = 1e-5) -> list[float]
     return unique
 
 
+def parse_period_text(text: str) -> list[float]:
+    if not text.strip():
+        return []
+    values: list[float] = []
+    for item in text.replace(",", " ").replace(";", " ").split():
+        period = float(item)
+        if period <= 0:
+            raise ValueError("Periods must be positive")
+        values.append(period)
+    return values
+
+
+def exclusion_options_from_result(result: dict | None) -> dict[str, float]:
+    if result is None:
+        return {}
+    options: dict[str, float] = {}
+    for group, key in [("detected", "peaks"), ("prewhitened", "residual_peaks")]:
+        for peak in result.get(key, []):
+            label = f"{group}: {peak['label']} - {peak['period']:.4f} d ({peak['kind']})"
+            options[label] = float(peak["period"])
+    return options
+
+
 def add_peak_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") -> None:
     for peak in peaks:
-        color = "#b13b32" if "artefact" in peak["kind"] else "#2457a6"
+        if "excluded" in peak["kind"]:
+            color = "#777777"
+        elif "artefact" in peak["kind"]:
+            color = "#b13b32"
+        else:
+            color = "#2457a6"
         y_value = peak.get(y_key)
         if y_value is None:
             continue
@@ -302,11 +330,7 @@ with st.sidebar:
             help="Comma, semicolon, or whitespace separated.",
         )
         if manual_periods.strip():
-            selected_period_values.extend(
-                float(value)
-                for value in manual_periods.replace(",", " ").replace(";", " ").split()
-                if value.strip()
-            )
+            selected_period_values.extend(parse_period_text(manual_periods))
         selected_period_values = unique_periods(selected_period_values)
         if selected_period_values:
             st.caption(
@@ -315,7 +339,41 @@ with st.sidebar:
             )
         fold_fit_harmonics = 1
 
+    st.subheader("Manual Exclusions")
+    exclusion_options = exclusion_options_from_result(st.session_state.get("last_result"))
+    selected_exclusion_labels = st.multiselect(
+        "Exclude periods from primary selection",
+        options=list(exclusion_options.keys()),
+        default=[],
+        help="Select peaks that are clearly sampling-window aliases or otherwise unwanted.",
+    )
+    manual_excluded_periods = st.text_input(
+        "Additional excluded periods [d]",
+        value="",
+        placeholder="e.g. 1.04, 24.13",
+        help="Comma, semicolon, or whitespace separated.",
+    )
+    exclusion_tolerance = st.number_input(
+        "Manual exclusion tolerance",
+        min_value=0.001,
+        value=0.015,
+        step=0.001,
+        format="%.3f",
+        help="Relative period tolerance used to match manual exclusions to detected peaks.",
+    )
+    excluded_period_values = [exclusion_options[label] for label in selected_exclusion_labels]
+    if manual_excluded_periods.strip():
+        excluded_period_values.extend(parse_period_text(manual_excluded_periods))
+    excluded_period_values = unique_periods(excluded_period_values)
+    if excluded_period_values:
+        st.caption("Excluded periods: " + ", ".join(f"{period:.4f} d" for period in excluded_period_values))
+
     run = st.button("Run analysis", type="primary", use_container_width=True)
+    apply_exclusions = st.button(
+        "Apply exclusions",
+        use_container_width=True,
+        help="Re-select the primary period using the last uploaded file and the current manual exclusions. Bootstrap is skipped for this quick update.",
+    )
 
 
 if uploaded is not None:
@@ -323,11 +381,7 @@ if uploaded is not None:
         raw_preview = uploaded.getvalue().decode("ascii", errors="replace")
         st.code("\n".join(raw_preview.splitlines()[:12]))
 
-if run:
-    if uploaded is None:
-        st.error("Upload a text table first.")
-        st.stop()
-
+def current_fields(bootstrap_value: int | None = None) -> dict[str, str]:
     fields = {
         "time_col": str(time_col),
         "flux_col": str(flux_col),
@@ -339,18 +393,30 @@ if run:
         "min_considered_period": str(min_considered_period),
         "window_artifact_power": str(window_artifact_power),
         "window_artifact_tolerance": str(window_artifact_tolerance),
-        "n_bootstrap": str(n_bootstrap),
+        "n_bootstrap": str(n_bootstrap if bootstrap_value is None else bootstrap_value),
         "bootstrap_width": str(bootstrap_width),
         "fold_bins": str(fold_bins),
         "fold_fit_mode": "selected" if fold_fit_mode == "Selected periods" else "harmonics",
         "fold_fit_harmonics": str(fold_fit_harmonics),
+        "exclusion_tolerance": str(exclusion_tolerance),
     }
     if selected_period_values:
         fields["fold_fit_periods"] = ",".join(f"{period:.12g}" for period in selected_period_values)
+    if excluded_period_values:
+        fields["excluded_periods"] = ",".join(f"{period:.12g}" for period in excluded_period_values)
     if t0_text.strip():
         fields["t0"] = t0_text.strip()
     if include_harmonic:
         fields["include_harmonic"] = "on"
+    return fields
+
+
+if run:
+    if uploaded is None:
+        st.error("Upload a text table first.")
+        st.stop()
+
+    fields = current_fields()
 
     with st.spinner("Running analysis..."):
         try:
@@ -359,10 +425,32 @@ if run:
             st.error(str(exc))
             st.stop()
     st.session_state["last_result"] = result
+    st.session_state["last_file_bytes"] = uploaded.getvalue()
+    st.session_state["last_filename"] = uploaded.name
+    st.session_state["last_fields"] = fields
+
+if apply_exclusions:
+    file_bytes = st.session_state.get("last_file_bytes")
+    filename = st.session_state.get("last_filename", "uploaded.dat")
+    if file_bytes is None:
+        st.error("Run an analysis with an uploaded file before applying exclusions.")
+        st.stop()
+
+    fields = current_fields(bootstrap_value=0)
+    with st.spinner("Applying manual exclusions..."):
+        try:
+            result = run_analysis(fields, file_bytes, filename)
+        except Exception as exc:
+            st.error(str(exc))
+            st.stop()
+    st.session_state["last_result"] = result
+    st.session_state["last_fields"] = fields
 
 if "last_result" in st.session_state:
-    if not run:
+    if not run and not apply_exclusions:
         st.caption("Showing the last completed analysis. Press Run analysis to apply the current settings.")
+    if apply_exclusions:
+        st.caption("Manual exclusions applied using the last uploaded file; bootstrap was skipped for this quick update.")
     render_results(st.session_state["last_result"])
 else:
     st.info("Upload a light curve and press Run analysis. For exploration, use 50-200 bootstrap iterations; use 1000 for final numbers.")

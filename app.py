@@ -344,6 +344,8 @@ def add_bootstrap_errors(
     rng = np.random.default_rng(seed)
     n = len(t)
     for peak in peaks:
+        if "excluded" in peak.kind:
+            continue
         low = max(peak.frequency * (1.0 - local_width), 1e-12)
         high = peak.frequency * (1.0 + local_width)
         local_frequency = np.linspace(low, high, n_local_frequency)
@@ -447,9 +449,32 @@ def parse_period_list(text: str) -> list[float]:
             continue
         period = float(item)
         if period <= 0:
-            raise ValueError("Folded-fit periods must be positive")
+            raise ValueError("Periods must be positive")
         periods.append(period)
     return periods
+
+
+def period_is_excluded(period: float, excluded_periods: list[float], tolerance: float) -> bool:
+    return any(abs(period - old) <= tolerance * max(period, old) for old in excluded_periods)
+
+
+def apply_manual_exclusions(
+    peaks: list[PeakSummary],
+    excluded_periods: list[float],
+    tolerance: float,
+) -> None:
+    if not excluded_periods:
+        return
+    for peak in peaks:
+        if period_is_excluded(peak.period, excluded_periods, tolerance):
+            peak.kind = "manually excluded"
+
+
+def usable_candidate_peaks(peaks: list[PeakSummary]) -> list[PeakSummary]:
+    return [
+        peak for peak in peaks
+        if "artefact" not in peak.kind and "excluded" not in peak.kind
+    ]
 
 
 def folded_fit_ratios(primary_period: float, fields: dict[str, str]) -> tuple[list[float], list[float]]:
@@ -481,7 +506,12 @@ def make_periodogram_plot(frequency, power, peaks, title) -> str:
     fig, ax = plt.subplots(figsize=(9, 4.8))
     ax.plot(period, power, color="0.1", lw=0.8)
     for peak in peaks:
-        color = "tab:red" if "artefact" in peak.kind else "tab:blue"
+        if "excluded" in peak.kind:
+            color = "0.45"
+        elif "artefact" in peak.kind:
+            color = "tab:red"
+        else:
+            color = "tab:blue"
         ax.axvline(peak.period, color=color, ls="--", lw=1.0)
         ax.scatter([peak.period], [peak.power], color=color, s=12)
         ax.text(peak.period, peak.power, f" {peak.period:.2f} d", color=color, fontsize=9, va="bottom")
@@ -535,6 +565,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     min_considered_period = float(fields.get("min_considered_period", fields.get("min_marked_period", "2.0")))
     window_artifact_power = float(fields.get("window_artifact_power", "0.01"))
     window_artifact_tolerance = float(fields.get("window_artifact_tolerance", "0.01"))
+    excluded_periods = parse_period_list(fields.get("excluded_periods", ""))
+    exclusion_tolerance = float(fields.get("exclusion_tolerance", "0.01"))
     n_bootstrap = int(fields.get("n_bootstrap", "1000"))
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
     include_harmonic = fields.get("include_harmonic", "on") == "on"
@@ -555,8 +587,9 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         window_power_threshold=window_artifact_power,
         relative_tolerance=window_artifact_tolerance,
     )
-    candidate_peaks = [p for p in peaks if "artefact" not in p.kind]
-    primary = candidate_peaks[0] if candidate_peaks else (peaks[0] if peaks else None)
+    apply_manual_exclusions(peaks, excluded_periods, exclusion_tolerance)
+    candidate_peaks = usable_candidate_peaks(peaks)
+    primary = candidate_peaks[0] if candidate_peaks else None
     add_harmonic_and_window_peaks(
         peaks,
         freq,
@@ -575,14 +608,16 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         window_power_threshold=window_artifact_power,
         relative_tolerance=window_artifact_tolerance,
     )
+    apply_manual_exclusions(peaks, excluded_periods, exclusion_tolerance)
     peaks.sort(key=lambda peak: peak.power, reverse=True)
     add_bootstrap_errors(t, y_analysis, dy, ls, peaks, n_bootstrap, bootstrap_width, 1200, seed=12345)
 
-    candidate_peaks = [p for p in peaks if "artefact" not in p.kind]
+    candidate_peaks = usable_candidate_peaks(peaks)
     if not candidate_peaks:
         raise ValueError(
-            "No non-window candidate peak remains after sampling-window filtering. "
-            "Try lowering the frequency range or increasing the sampling-window artefact threshold."
+            "No usable candidate peak remains after sampling-window/manual filtering. "
+            "Try lowering the frequency range, increasing the sampling-window artefact threshold, "
+            "or removing some manual exclusions."
         )
     primary = candidate_peaks[0]
     remove_freqs = [primary.frequency]
@@ -601,8 +636,9 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         window_power_threshold=window_artifact_power,
         relative_tolerance=window_artifact_tolerance,
     )
-    residual_candidate_peaks = [p for p in residual_peaks if "artefact" not in p.kind]
-    residual_primary = residual_candidate_peaks[0] if residual_candidate_peaks else (residual_peaks[0] if residual_peaks else None)
+    apply_manual_exclusions(residual_peaks, excluded_periods, exclusion_tolerance)
+    residual_candidate_peaks = usable_candidate_peaks(residual_peaks)
+    residual_primary = residual_candidate_peaks[0] if residual_candidate_peaks else None
     add_harmonic_and_window_peaks(
         residual_peaks,
         freq,
@@ -621,6 +657,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         window_power_threshold=window_artifact_power,
         relative_tolerance=window_artifact_tolerance,
     )
+    apply_manual_exclusions(residual_peaks, excluded_periods, exclusion_tolerance)
     residual_peaks.sort(key=lambda peak: peak.power, reverse=True)
 
     fit_ratios, fit_periods = folded_fit_ratios(primary.period, fields)
@@ -631,6 +668,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "baseline": float(t.max() - t.min()),
         "primary_period": primary.period,
         "t0": t0,
+        "excluded_periods": excluded_periods,
+        "exclusion_tolerance": exclusion_tolerance,
         "peaks": [asdict(p) for p in peaks],
         "residual_peaks": [asdict(p) for p in residual_peaks],
         "folded_maxima": [{"phase": ph, "flux": val} for ph, val in folded["maxima"]],
