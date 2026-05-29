@@ -37,6 +37,6 @@ The default bootstrap count is 1000. For interactive exploration, use 50-200 fir
 
 ## Notes
 
-The upload validator only accepts ASCII numeric tables. It rejects non-ASCII content, unsupported extensions, and simple command-like patterns before parsing the table.
+The upload validator only accepts ASCII numeric tables. Header/comment lines starting with `#` or `%` are ignored. It rejects non-ASCII content, unsupported extensions, and simple command-like patterns before parsing the table.
 
 Sampling-window classification is heuristic. It flags a periodogram peak as a likely artefact when it coincides, within the approximate Rayleigh resolution, with one of the stronger peaks in the sampling window.

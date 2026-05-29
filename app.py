@@ -59,6 +59,7 @@ SUSPICIOUS_SHELL_PATTERNS = [
     ]
 ]
 NUMERIC_TABLE_LINE = re.compile(r"^[\s,+\-0-9.eEdD]+$")
+COMMENT_PREFIXES = ("#", "%")
 
 
 def validate_upload(filename: str, raw: bytes) -> str:
@@ -85,12 +86,12 @@ def validate_upload(filename: str, raw: bytes) -> str:
     numeric_rows = 0
     for line_number, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not stripped or stripped.startswith(COMMENT_PREFIXES):
             continue
         if not NUMERIC_TABLE_LINE.match(stripped.replace(",", " ")):
             raise ValueError(
                 f"Line {line_number} is not a numeric table row or a comment. "
-                "Use '#' for comments and numeric columns for data."
+                "Use '#' or '%' for comments and numeric columns for data."
             )
         numeric_rows += 1
     if numeric_rows < 10:
@@ -106,7 +107,10 @@ def read_columns(
     error_col: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     text = validate_upload(filename, raw)
-    data = np.genfromtxt(io.StringIO(text.replace(",", " ")), comments="#", invalid_raise=False)
+    numeric_text = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith(COMMENT_PREFIXES)
+    )
+    data = np.genfromtxt(io.StringIO(numeric_text.replace(",", " ")), invalid_raise=False)
     if data.ndim == 1:
         data = data.reshape(1, -1)
     if data.ndim != 2:
