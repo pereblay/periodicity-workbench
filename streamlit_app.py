@@ -65,14 +65,16 @@ def parse_period_text(text: str) -> list[float]:
     return values
 
 
-def exclusion_options_from_result(result: dict | None) -> dict[str, float]:
+def exclusion_options_from_result(result: dict | None) -> dict[float, str]:
     if result is None:
         return {}
-    options: dict[str, float] = {}
+    options: dict[float, str] = {}
     for group, key in [("detected", "peaks"), ("prewhitened", "residual_peaks")]:
         for peak in result.get(key, []):
-            label = f"{group}: {peak['label']} - {peak['period']:.4f} d ({peak['kind']})"
-            options[label] = float(peak["period"])
+            period = float(peak["period"])
+            if any(abs(period - old) <= 1e-5 * max(period, old) for old in options):
+                continue
+            options[period] = f"{group}: {peak['label']} - {period:.4f} d ({peak['kind']})"
     return options
 
 
@@ -341,9 +343,10 @@ with st.sidebar:
 
     st.subheader("Manual Exclusions")
     exclusion_options = exclusion_options_from_result(st.session_state.get("last_result"))
-    selected_exclusion_labels = st.multiselect(
+    selected_exclusion_periods = st.multiselect(
         "Exclude periods from primary selection",
         options=list(exclusion_options.keys()),
+        format_func=lambda period: exclusion_options.get(period, f"{period:.4f} d"),
         default=[],
         help="Select peaks that are clearly sampling-window aliases or otherwise unwanted.",
     )
@@ -361,19 +364,19 @@ with st.sidebar:
         format="%.3f",
         help="Relative period tolerance used to match manual exclusions to detected peaks.",
     )
-    excluded_period_values = [exclusion_options[label] for label in selected_exclusion_labels]
+    excluded_period_values = list(selected_exclusion_periods)
     if manual_excluded_periods.strip():
         excluded_period_values.extend(parse_period_text(manual_excluded_periods))
     excluded_period_values = unique_periods(excluded_period_values)
     if excluded_period_values:
         st.caption("Excluded periods: " + ", ".join(f"{period:.4f} d" for period in excluded_period_values))
 
-    run = st.button("Run analysis", type="primary", use_container_width=True)
     apply_exclusions = st.button(
         "Apply exclusions",
         use_container_width=True,
         help="Re-select the primary period using the last uploaded file and the current manual exclusions. Bootstrap is skipped for this quick update.",
     )
+    run = st.button("Run analysis", type="primary", use_container_width=True)
 
 
 if uploaded is not None:
@@ -428,6 +431,7 @@ if run:
     st.session_state["last_file_bytes"] = uploaded.getvalue()
     st.session_state["last_filename"] = uploaded.name
     st.session_state["last_fields"] = fields
+    st.rerun()
 
 if apply_exclusions:
     file_bytes = st.session_state.get("last_file_bytes")
