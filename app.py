@@ -498,6 +498,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     residual_peaks.sort(key=lambda peak: peak.power, reverse=True)
 
     folded = folded_profile(t, y, dy, primary.period, t0, fold_bins, 2 if include_harmonic else 1)
+    period = 1.0 / freq
     return {
         "n_points": len(t),
         "baseline": float(t.max() - t.min()),
@@ -506,6 +507,18 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "peaks": [asdict(p) for p in peaks],
         "residual_peaks": [asdict(p) for p in residual_peaks],
         "folded_maxima": [{"phase": ph, "flux": val} for ph, val in folded["maxima"]],
+        "series": {
+            "period": period.tolist(),
+            "frequency": freq.tolist(),
+            "power": power.tolist(),
+            "window_power": win.tolist(),
+            "residual_power": residual_power.tolist(),
+            "fold_phase": folded["phase"].tolist(),
+            "fold_flux": folded["flux"].tolist(),
+            "fold_error": folded["error"].tolist(),
+            "fold_model_phase": folded["model_phase"].tolist(),
+            "fold_model_flux": folded["model_flux"].tolist(),
+        },
         "plots": {
             "periodogram": make_periodogram_plot(freq, power, peaks, "Lomb-Scargle periodogram"),
             "window": make_window_plot(freq, win, peaks),

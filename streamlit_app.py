@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import base64
-from io import BytesIO
-
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from app import run_analysis
@@ -14,11 +12,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-
-def image_bytes(data_uri: str) -> BytesIO:
-    _, encoded = data_uri.split(",", 1)
-    return BytesIO(base64.b64decode(encoded))
 
 
 def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
@@ -38,6 +31,125 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def add_peak_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") -> None:
+    for peak in peaks:
+        color = "#b13b32" if "artefact" in peak["kind"] else "#2457a6"
+        y_value = peak.get(y_key)
+        if y_value is None:
+            continue
+        fig.add_vline(x=peak["period"], line_dash="dash", line_color=color, opacity=0.75)
+        fig.add_trace(
+            go.Scatter(
+                x=[peak["period"]],
+                y=[y_value],
+                mode="markers+text",
+                marker=dict(color=color, size=7),
+                text=[f"{peak['period']:.2f} d"],
+                textposition="top right",
+                showlegend=False,
+                hovertemplate=(
+                    f"{peak['label']}<br>"
+                    "Period=%{x:.6f} d<br>"
+                    "Power=%{y:.6g}<br>"
+                    f"Type={peak['kind']}<extra></extra>"
+                ),
+            )
+        )
+
+
+def periodogram_figure(result: dict, key: str, title: str, peaks_key: str) -> go.Figure:
+    series = result["series"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=series["period"],
+            y=series[key],
+            mode="lines",
+            line=dict(color="#20242a", width=1.2),
+            name=title,
+            hovertemplate="Period=%{x:.6f} d<br>Power=%{y:.6g}<extra></extra>",
+        )
+    )
+    add_peak_markers(fig, result[peaks_key])
+    fig.update_layout(
+        title=title,
+        xaxis_title="Period [d]",
+        yaxis_title="Lomb-Scargle power",
+        height=430,
+        margin=dict(l=20, r=20, t=50, b=20),
+        showlegend=False,
+    )
+    return fig
+
+
+def window_figure(result: dict) -> go.Figure:
+    series = result["series"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=series["period"],
+            y=series["window_power"],
+            mode="lines",
+            line=dict(color="#20242a", width=1.2),
+            hovertemplate="Period=%{x:.6f} d<br>Window power=%{y:.6g}<extra></extra>",
+        )
+    )
+    for peak in result["peaks"]:
+        if peak["window_period"] is not None:
+            fig.add_vline(x=peak["window_period"], line_dash="dash", line_color="#b13b32", opacity=0.75)
+    fig.update_layout(
+        title="Sampling window",
+        xaxis_title="Period [d]",
+        yaxis_title="Sampling-window power",
+        height=430,
+        margin=dict(l=20, r=20, t=50, b=20),
+        showlegend=False,
+    )
+    return fig
+
+
+def folded_figure(result: dict) -> go.Figure:
+    series = result["series"]
+    phase = series["fold_phase"]
+    flux = series["fold_flux"]
+    error = series["fold_error"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=phase + [p + 1.0 for p in phase],
+            y=flux + flux,
+            error_y=dict(type="data", array=error + error, visible=True),
+            mode="markers",
+            marker=dict(color="#20242a", size=7),
+            name="Folded bins",
+            hovertemplate="Phase=%{x:.5f}<br>Flux=%{y:.6g}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=series["fold_model_phase"],
+            y=series["fold_model_flux"],
+            mode="lines",
+            line=dict(color="#2457a6", width=2, dash="dot"),
+            name="Folded model",
+            hovertemplate="Phase=%{x:.5f}<br>Model=%{y:.6g}<extra></extra>",
+        )
+    )
+    for maximum in result["folded_maxima"]:
+        for offset in [0.0, 1.0]:
+            fig.add_vline(x=maximum["phase"] + offset, line_dash="dash", line_color="#2457a6", opacity=0.75)
+    fig.update_layout(
+        title="Folded profile",
+        xaxis_title="Orbital phase",
+        yaxis_title="Weighted mean flux",
+        height=430,
+        margin=dict(l=20, r=20, t=50, b=20),
+        showlegend=False,
+    )
+    fig.update_xaxes(range=[0, 2])
+    return fig
 
 
 st.title("Periodicity Workbench")
@@ -120,13 +232,13 @@ if run:
 
     plot_cols = st.columns(2)
     with plot_cols[0]:
-        st.image(image_bytes(result["plots"]["periodogram"]), caption="Lomb-Scargle periodogram", use_container_width=True)
+        st.plotly_chart(periodogram_figure(result, "power", "Lomb-Scargle periodogram", "peaks"), use_container_width=True)
     with plot_cols[1]:
-        st.image(image_bytes(result["plots"]["window"]), caption="Sampling window", use_container_width=True)
+        st.plotly_chart(window_figure(result), use_container_width=True)
     with plot_cols[0]:
-        st.image(image_bytes(result["plots"]["prewhitened"]), caption="After prewhitening", use_container_width=True)
+        st.plotly_chart(periodogram_figure(result, "residual_power", "After prewhitening", "residual_peaks"), use_container_width=True)
     with plot_cols[1]:
-        st.image(image_bytes(result["plots"]["folded"]), caption="Folded profile", use_container_width=True)
+        st.plotly_chart(folded_figure(result), use_container_width=True)
 
     st.subheader("Detected peaks")
     st.dataframe(peaks_dataframe(result["peaks"]), use_container_width=True, hide_index=True)
