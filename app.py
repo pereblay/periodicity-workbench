@@ -308,7 +308,7 @@ def append_unique_peak(peaks: list[PeakSummary], peak: PeakSummary | None, label
         if abs(old.period - peak.period) < tolerance * max(old.period, peak.period):
             if not label.startswith("peak"):
                 old.label = label
-            if kind != old.kind and "artefact" in kind:
+            if kind != old.kind and ("artefact" in kind or "harmonic" in kind):
                 old.kind = kind
             if peak.window_frequency is not None:
                 old.window_frequency = peak.window_frequency
@@ -329,11 +329,16 @@ def add_harmonic_and_window_peaks(
     primary: PeakSummary | None,
     min_considered_period: float,
     window_power_threshold: float = 0.01,
+    max_harmonic_order: int = 8,
 ) -> None:
     if primary is not None:
-        harmonic = local_lomb_peak(frequency, power, ls, 2.0 * primary.frequency, fractional_width=0.04)
-        if harmonic is not None and harmonic.period >= min_considered_period and harmonic.fap <= 0.2:
-            append_unique_peak(peaks, harmonic, "P/2 harmonic", "candidate")
+        for order in range(2, max_harmonic_order + 1):
+            target_frequency = order * primary.frequency
+            if target_frequency > frequency.max():
+                break
+            harmonic = local_lomb_peak(frequency, power, ls, target_frequency, fractional_width=0.04)
+            if harmonic is not None and harmonic.period >= min_considered_period and harmonic.fap <= 0.2:
+                append_unique_peak(peaks, harmonic, f"P/{order} harmonic", "harmonic candidate")
 
 
 def add_bootstrap_errors(
@@ -432,15 +437,28 @@ def fit_sinusoids_with_terms(
     return model, rows
 
 
-def detected_harmonic_for_period(period: float, peaks: list[PeakSummary], tolerance: float = 0.04) -> PeakSummary | None:
-    target = period / 2.0
-    candidates = [
-        peak for peak in usable_candidate_peaks(peaks)
-        if abs(peak.period - target) <= tolerance * max(peak.period, target)
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda peak: peak.power)
+def detected_harmonics_for_period(
+    period: float,
+    peaks: list[PeakSummary],
+    tolerance: float = 0.04,
+    max_harmonic_order: int = 8,
+) -> list[tuple[int, PeakSummary]]:
+    harmonics: list[tuple[int, PeakSummary]] = []
+    used_periods: list[float] = []
+    for order in range(2, max_harmonic_order + 1):
+        target = period / order
+        candidates = [
+            peak for peak in usable_candidate_peaks(peaks)
+            if abs(peak.period - target) <= tolerance * max(peak.period, target)
+        ]
+        if not candidates:
+            continue
+        harmonic = max(candidates, key=lambda peak: peak.power)
+        if any(abs(harmonic.period - old) <= 1e-5 * max(harmonic.period, old) for old in used_periods):
+            continue
+        used_periods.append(harmonic.period)
+        harmonics.append((order, harmonic))
+    return harmonics
 
 
 def matching_peak_for_period(period: float, peaks: list[PeakSummary], tolerance: float = 0.04) -> PeakSummary | None:
@@ -456,7 +474,6 @@ def matching_peak_for_period(period: float, peaks: list[PeakSummary], tolerance:
 def prewhitening_terms_from_periods(
     periods: list[float],
     peaks: list[PeakSummary],
-    include_harmonic: bool,
 ) -> list[dict[str, float | str]]:
     terms: list[dict[str, float | str]] = []
     for idx, period in enumerate(periods, start=1):
@@ -471,19 +488,17 @@ def prewhitening_terms_from_periods(
                 "frequency_error": None if main_peak is None else main_peak.frequency_error,
             }
         )
-        if include_harmonic:
-            harmonic = detected_harmonic_for_period(period, peaks)
-            if harmonic is not None:
-                terms.append(
-                    {
-                        "label": f"step {idx} detected P/2 harmonic",
-                        "frequency": harmonic.frequency,
-                        "main_period": main_peak.period if main_peak is not None else period,
-                        "main_period_error": None if main_peak is None else main_peak.period_error,
-                        "period_error": harmonic.period_error,
-                        "frequency_error": harmonic.frequency_error,
-                    }
-                )
+        for order, harmonic in detected_harmonics_for_period(period, peaks):
+            terms.append(
+                {
+                    "label": f"step {idx} detected P/{order} harmonic",
+                    "frequency": harmonic.frequency,
+                    "main_period": main_peak.period if main_peak is not None else period,
+                    "main_period_error": None if main_peak is None else main_peak.period_error,
+                    "period_error": harmonic.period_error,
+                    "frequency_error": harmonic.frequency_error,
+                }
+            )
     return terms
 
 
@@ -678,7 +693,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     prewhiten_periods = parse_period_list(fields.get("prewhiten_periods", ""))
     n_bootstrap = int(fields.get("n_bootstrap", "1000"))
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
-    include_harmonic = fields.get("include_harmonic", "on") == "on"
+    include_harmonic = fields.get("include_harmonic", "off") == "on"
     fold_bins = int(fields.get("fold_bins", "10"))
     t, y, dy = read_columns(file_bytes, filename, time_col, flux_col, error_col)
     y_offset = weighted_median(y, 1.0 / dy**2)
@@ -735,7 +750,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         prewhiten_base_periods = prewhiten_periods
     else:
         prewhiten_base_periods = [primary.period]
-    prewhiten_terms = prewhitening_terms_from_periods(prewhiten_base_periods, peaks, include_harmonic)
+    prewhiten_terms = prewhitening_terms_from_periods(prewhiten_base_periods, peaks)
     prewhiten_model, prewhitening_table = fit_sinusoids_with_terms(t, y_analysis, dy, prewhiten_terms)
     residuals = y_analysis - prewhiten_model
     residual_power, residual_ls, residual_peaks = find_lomb_scargle_peaks(

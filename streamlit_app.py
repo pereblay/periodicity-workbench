@@ -355,7 +355,7 @@ with st.sidebar:
     st.subheader("Folded Profile")
     fold_bins = st.number_input("Phase bins", min_value=4, max_value=80, value=10, step=1)
     t0_text = st.text_input("T0 / MJD", value="", placeholder="first data point")
-    include_harmonic = st.checkbox("Include first harmonic", value=True)
+    include_harmonic = st.checkbox("Include first harmonic in folded fit", value=False)
     fold_fit_mode = st.radio(
         "Folded-fit frequencies",
         ["Harmonics of primary", "Selected periods"],
