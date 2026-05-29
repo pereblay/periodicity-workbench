@@ -33,17 +33,24 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def period_options_from_result(result: dict | None) -> dict[str, float]:
+def period_options_from_result(result: dict | None, key: str) -> dict[str, float]:
     if result is None:
         return {}
     options: dict[str, float] = {}
-    for group_name, key in [("detected", "peaks"), ("prewhitened", "residual_peaks")]:
-        for peak in result.get(key, []):
-            if "artefact" in peak["kind"]:
-                continue
-            label = f"{group_name}: {peak['label']} - {peak['period']:.4f} d ({peak['kind']})"
-            options[label] = float(peak["period"])
+    for peak in result.get(key, []):
+        if "artefact" in peak["kind"]:
+            continue
+        label = f"{peak['label']} - {peak['period']:.4f} d ({peak['kind']})"
+        options[label] = float(peak["period"])
     return options
+
+
+def unique_periods(periods: list[float], tolerance: float = 1e-5) -> list[float]:
+    unique: list[float] = []
+    for period in periods:
+        if all(abs(period - old) > tolerance * max(period, old) for old in unique):
+            unique.append(period)
+    return unique
 
 
 def add_peak_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") -> None:
@@ -229,14 +236,26 @@ with st.sidebar:
         )
         selected_period_values: list[float] = []
     else:
-        previous_options = period_options_from_result(st.session_state.get("last_result"))
-        selected_labels = st.multiselect(
-            "Use periods from previous detected/prewhitened peaks",
-            options=list(previous_options.keys()),
+        previous_result = st.session_state.get("last_result")
+        detected_options = period_options_from_result(previous_result, "peaks")
+        prewhitened_options = period_options_from_result(previous_result, "residual_peaks")
+        selected_detected_labels = st.multiselect(
+            "Use periods from detected peaks",
+            options=list(detected_options.keys()),
             default=[],
             help="Run once to populate this list, then select periods and run again.",
         )
-        selected_period_values = [previous_options[label] for label in selected_labels]
+        selected_prewhitened_labels = st.multiselect(
+            "Use periods from after-prewhitening peaks",
+            options=list(prewhitened_options.keys()),
+            default=[],
+            help="You can select more than one period from this list.",
+        )
+        selected_period_values = [
+            detected_options[label] for label in selected_detected_labels
+        ] + [
+            prewhitened_options[label] for label in selected_prewhitened_labels
+        ]
         manual_periods = st.text_input(
             "Additional periods [d]",
             value="",
@@ -248,6 +267,12 @@ with st.sidebar:
                 float(value)
                 for value in manual_periods.replace(",", " ").replace(";", " ").split()
                 if value.strip()
+            )
+        selected_period_values = unique_periods(selected_period_values)
+        if selected_period_values:
+            st.caption(
+                "Selected folded-fit periods: "
+                + ", ".join(f"{period:.4f} d" for period in selected_period_values)
             )
         fold_fit_harmonics = 1
 
