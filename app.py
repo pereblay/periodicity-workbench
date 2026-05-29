@@ -159,24 +159,46 @@ def classify_peaks(
     max_window_peaks: int = 50,
     window_power_threshold: float = 0.01,
     relative_tolerance: float = 0.01,
+    short_period_limit: float = 2.0,
+    short_period_window_threshold: float = 0.002,
+    short_period_relative_tolerance: float = 0.06,
 ) -> None:
     window_indices, _ = find_peaks(window_power)
+    endpoint_indices = []
+    if len(window_power) >= 2:
+        if window_power[0] > window_power[1]:
+            endpoint_indices.append(0)
+        if window_power[-1] > window_power[-2]:
+            endpoint_indices.append(len(window_power) - 1)
+    if endpoint_indices:
+        window_indices = np.unique(np.concatenate([window_indices, np.asarray(endpoint_indices, dtype=int)]))
     if len(window_indices) == 0:
         return
     ranked_all = window_indices[np.argsort(window_power[window_indices])[::-1]]
-    ranked = [idx for idx in ranked_all if window_power[idx] >= window_power_threshold][:max_window_peaks]
+    minimum_threshold = min(window_power_threshold, short_period_window_threshold)
+    ranked = [idx for idx in ranked_all if window_power[idx] >= minimum_threshold][:max_window_peaks]
     if not ranked:
         return
     ranked = np.asarray(ranked)
     resolution = 1.0 / baseline
     grid_tolerance = max(2.0 * np.median(np.diff(frequency)), resolution)
     for peak in peaks:
+        peak_window_threshold = window_power_threshold
+        peak_relative_tolerance = relative_tolerance
+        if peak.period <= short_period_limit:
+            peak_window_threshold = min(window_power_threshold, short_period_window_threshold)
+            peak_relative_tolerance = max(relative_tolerance, short_period_relative_tolerance)
+
+        eligible = ranked[window_power[ranked] >= peak_window_threshold]
+        if len(eligible) == 0:
+            continue
         distances = np.abs(frequency[ranked] - peak.frequency)
-        nearest = int(ranked[int(np.argmin(distances))])
+        distances = np.abs(frequency[eligible] - peak.frequency)
+        nearest = int(eligible[int(np.argmin(distances))])
         freq_delta = abs(frequency[nearest] - peak.frequency)
         period_delta = abs((1.0 / frequency[nearest]) - peak.period)
-        freq_tolerance = max(grid_tolerance, relative_tolerance * peak.frequency)
-        period_tolerance = relative_tolerance * peak.period
+        freq_tolerance = max(grid_tolerance, peak_relative_tolerance * peak.frequency)
+        period_tolerance = peak_relative_tolerance * peak.period
         if freq_delta <= freq_tolerance or period_delta <= period_tolerance:
             peak.kind = "sampling-window artefact"
             peak.window_frequency = float(frequency[nearest])
@@ -250,6 +272,10 @@ def append_unique_peak(peaks: list[PeakSummary], peak: PeakSummary | None, label
                 old.label = label
             if kind != old.kind and "artefact" in kind:
                 old.kind = kind
+            if peak.window_frequency is not None:
+                old.window_frequency = peak.window_frequency
+                old.window_period = peak.window_period
+                old.window_power = peak.window_power
             return
     peak.label = label
     peak.kind = kind
