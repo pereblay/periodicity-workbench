@@ -17,7 +17,7 @@ It supports:
 ## Local Run
 
 ```bash
-cd /Users/pedro.blay/Documents/Codex/2026-05-06/periodicity_app_streamlit
+cd /path_of_installation/periodicity_app_streamlit
 pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
