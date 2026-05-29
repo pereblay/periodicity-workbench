@@ -155,19 +155,11 @@ def spectral_window(t: np.ndarray, frequency: np.ndarray, chunk_size: int = 500)
     return out
 
 
-def classify_peaks(
-    peaks: list[PeakSummary],
-    frequency: np.ndarray,
+def window_peak_indices(
     window_power: np.ndarray,
-    baseline: float,
-    max_window_peaks: int = 50,
-    window_power_threshold: float = 0.01,
-    relative_tolerance: float = 0.01,
-    short_period_limit: float = 2.0,
-    short_period_window_threshold: float = 0.002,
-    short_period_relative_tolerance: float = 0.06,
-) -> None:
-    window_indices, _ = find_peaks(window_power)
+    threshold: float,
+) -> np.ndarray:
+    indices, _ = find_peaks(window_power)
     endpoint_indices = []
     if len(window_power) >= 2:
         if window_power[0] > window_power[1]:
@@ -175,15 +167,49 @@ def classify_peaks(
         if window_power[-1] > window_power[-2]:
             endpoint_indices.append(len(window_power) - 1)
     if endpoint_indices:
-        window_indices = np.unique(np.concatenate([window_indices, np.asarray(endpoint_indices, dtype=int)]))
-    if len(window_indices) == 0:
-        return
-    ranked_all = window_indices[np.argsort(window_power[window_indices])[::-1]]
+        indices = np.unique(np.concatenate([indices, np.asarray(endpoint_indices, dtype=int)]))
+    if len(indices) == 0:
+        return indices
+    return indices[window_power[indices] >= threshold]
+
+
+def sampling_window_peaks(
+    frequency: np.ndarray,
+    window_power: np.ndarray,
+    threshold: float,
+    min_period: float,
+) -> list[dict[str, float]]:
+    indices = window_peak_indices(window_power, threshold)
+    rows: list[dict[str, float]] = []
+    for idx in indices[np.argsort(window_power[indices])[::-1]]:
+        period = float(1.0 / frequency[idx])
+        if period < min_period:
+            continue
+        rows.append(
+            {
+                "period": period,
+                "frequency": float(frequency[idx]),
+                "power": float(window_power[idx]),
+            }
+        )
+    return rows
+
+
+def classify_peaks(
+    peaks: list[PeakSummary],
+    frequency: np.ndarray,
+    window_power: np.ndarray,
+    baseline: float,
+    window_power_threshold: float = 0.01,
+    relative_tolerance: float = 0.01,
+    short_period_limit: float = 2.0,
+    short_period_window_threshold: float = 0.002,
+    short_period_relative_tolerance: float = 0.06,
+) -> None:
     minimum_threshold = min(window_power_threshold, short_period_window_threshold)
-    ranked = [idx for idx in ranked_all if window_power[idx] >= minimum_threshold][:max_window_peaks]
-    if not ranked:
+    ranked = window_peak_indices(window_power, minimum_threshold)
+    if len(ranked) == 0:
         return
-    ranked = np.asarray(ranked)
     resolution = 1.0 / baseline
     grid_tolerance = max(2.0 * np.median(np.diff(frequency)), resolution)
     for peak in peaks:
@@ -193,16 +219,24 @@ def classify_peaks(
             peak_window_threshold = min(window_power_threshold, short_period_window_threshold)
             peak_relative_tolerance = max(relative_tolerance, short_period_relative_tolerance)
 
+        peak_grid_index = int(np.argmin(np.abs(frequency - peak.frequency)))
+        if window_power[peak_grid_index] >= peak_window_threshold:
+            peak.kind = "sampling-window artefact"
+            peak.window_frequency = float(frequency[peak_grid_index])
+            peak.window_period = float(1.0 / frequency[peak_grid_index])
+            peak.window_power = float(window_power[peak_grid_index])
+            continue
+
         eligible = ranked[window_power[ranked] >= peak_window_threshold]
         if len(eligible) == 0:
             continue
-        distances = np.abs(frequency[ranked] - peak.frequency)
         distances = np.abs(frequency[eligible] - peak.frequency)
         nearest = int(eligible[int(np.argmin(distances))])
         freq_delta = abs(frequency[nearest] - peak.frequency)
         period_delta = abs((1.0 / frequency[nearest]) - peak.period)
         freq_tolerance = max(grid_tolerance, peak_relative_tolerance * peak.frequency)
-        period_tolerance = peak_relative_tolerance * peak.period
+        period_grid_tolerance = grid_tolerance / max(peak.frequency**2, 1e-12)
+        period_tolerance = max(2.0 * period_grid_tolerance, peak_relative_tolerance * peak.period)
         if freq_delta <= freq_tolerance or period_delta <= period_tolerance:
             peak.kind = "sampling-window artefact"
             peak.window_frequency = float(frequency[nearest])
@@ -294,38 +328,12 @@ def add_harmonic_and_window_peaks(
     window_power: np.ndarray,
     primary: PeakSummary | None,
     min_considered_period: float,
-    max_window_peaks: int = 4,
     window_power_threshold: float = 0.01,
 ) -> None:
     if primary is not None:
         harmonic = local_lomb_peak(frequency, power, ls, 2.0 * primary.frequency, fractional_width=0.04)
         if harmonic is not None and harmonic.period >= min_considered_period and harmonic.fap <= 0.2:
             append_unique_peak(peaks, harmonic, "P/2 harmonic", "data candidate")
-
-    window_indices, _ = find_peaks(window_power)
-    if len(window_indices) == 0:
-        return
-    ranked = window_indices[np.argsort(window_power[window_indices])[::-1]]
-    added = 0
-    for idx in ranked:
-        if window_power[idx] < window_power_threshold:
-            continue
-        target_frequency = float(frequency[idx])
-        target_period = float(1.0 / target_frequency)
-        if target_period < min_considered_period:
-            continue
-        peak = local_lomb_peak(frequency, power, ls, target_frequency, fractional_width=0.025)
-        if peak is None:
-            continue
-        peak.window_frequency = target_frequency
-        peak.window_period = target_period
-        peak.window_power = float(window_power[idx])
-        before = len(peaks)
-        append_unique_peak(peaks, peak, "sampling window", "sampling-window artefact", tolerance=0.025)
-        if len(peaks) > before:
-            added += 1
-        if added >= max_window_peaks:
-            break
 
 
 def add_bootstrap_errors(
@@ -376,6 +384,74 @@ def fit_sinusoids(t: np.ndarray, y: np.ndarray, dy: np.ndarray, frequencies: lis
     weights = 1.0 / dy**2
     coeff, *_ = np.linalg.lstsq(design * np.sqrt(weights)[:, None], y * np.sqrt(weights), rcond=None)
     return design @ coeff, coeff
+
+
+def fit_sinusoids_with_terms(
+    t: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    terms: list[dict[str, float | str]],
+) -> tuple[np.ndarray, list[dict[str, float | str]]]:
+    frequencies = [float(term["frequency"]) for term in terms]
+    model, coeff = fit_sinusoids(t, y, dy, frequencies)
+    shifted = t - t.min()
+    cols = [np.ones_like(t)]
+    for freq in frequencies:
+        phase = 2.0 * np.pi * freq * shifted
+        cols.extend([np.cos(phase), np.sin(phase)])
+    design = np.column_stack(cols)
+    weights = 1.0 / dy**2
+    normal = design.T @ (design * weights[:, None])
+    covariance = np.linalg.pinv(normal)
+    rows: list[dict[str, float | str]] = []
+    for n, term in enumerate(terms):
+        cos_idx = 1 + 2 * n
+        sin_idx = cos_idx + 1
+        cos_coeff = float(coeff[cos_idx])
+        sin_coeff = float(coeff[sin_idx])
+        amplitude = float(np.hypot(cos_coeff, sin_coeff))
+        if amplitude > 0:
+            grad = np.asarray([cos_coeff / amplitude, sin_coeff / amplitude])
+            cov2 = covariance[np.ix_([cos_idx, sin_idx], [cos_idx, sin_idx])]
+            amplitude_error = float(np.sqrt(max(0.0, grad @ cov2 @ grad)))
+        else:
+            amplitude_error = None
+        rows.append(
+            {
+                "label": str(term["label"]),
+                "period": float(1.0 / float(term["frequency"])),
+                "frequency": float(term["frequency"]),
+                "amplitude": amplitude,
+                "amplitude_error": amplitude_error,
+            }
+        )
+    return model, rows
+
+
+def detected_harmonic_for_period(period: float, peaks: list[PeakSummary], tolerance: float = 0.04) -> PeakSummary | None:
+    target = period / 2.0
+    candidates = [
+        peak for peak in usable_candidate_peaks(peaks)
+        if abs(peak.period - target) <= tolerance * max(peak.period, target)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda peak: peak.power)
+
+
+def prewhitening_terms_from_periods(
+    periods: list[float],
+    peaks: list[PeakSummary],
+    include_harmonic: bool,
+) -> list[dict[str, float | str]]:
+    terms: list[dict[str, float | str]] = []
+    for idx, period in enumerate(periods, start=1):
+        terms.append({"label": f"step {idx}", "frequency": 1.0 / period})
+        if include_harmonic:
+            harmonic = detected_harmonic_for_period(period, peaks)
+            if harmonic is not None:
+                terms.append({"label": f"step {idx} detected P/2 harmonic", "frequency": harmonic.frequency})
+    return terms
 
 
 def folded_profile(
@@ -522,13 +598,12 @@ def make_periodogram_plot(frequency, power, peaks, title) -> str:
     return fig_to_data_uri(fig)
 
 
-def make_window_plot(frequency, window_power, peaks) -> str:
+def make_window_plot(frequency, window_power, window_peaks) -> str:
     period = 1.0 / frequency
     fig, ax = plt.subplots(figsize=(9, 4.2))
     ax.plot(period, window_power, color="0.15", lw=0.8)
-    for peak in peaks:
-        if peak.window_period is not None:
-            ax.axvline(peak.window_period, color="tab:red", ls="--", lw=1.0)
+    for peak in window_peaks:
+        ax.axvline(peak["period"], color="tab:red", ls="--", lw=0.8, alpha=0.35)
     ax.set_xlabel("Period [d]")
     ax.set_ylabel("Sampling-window power")
     ax.set_title("Sampling window")
@@ -567,6 +642,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     window_artifact_tolerance = float(fields.get("window_artifact_tolerance", "0.01"))
     excluded_periods = parse_period_list(fields.get("excluded_periods", ""))
     exclusion_tolerance = float(fields.get("exclusion_tolerance", "0.01"))
+    prewhiten_periods = parse_period_list(fields.get("prewhiten_periods", ""))
     n_bootstrap = int(fields.get("n_bootstrap", "1000"))
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
     include_harmonic = fields.get("include_harmonic", "on") == "on"
@@ -579,6 +655,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     freq = frequency_grid(t, fmin, fmax, samples_per_peak)
     power, ls, peaks = find_lomb_scargle_peaks(t, y_analysis, dy, freq, max_peaks, min_considered_period=min_considered_period)
     win = spectral_window(t, freq)
+    window_peaks = sampling_window_peaks(freq, win, window_artifact_power, min_considered_period)
     classify_peaks(
         peaks,
         freq,
@@ -620,10 +697,12 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             "or removing some manual exclusions."
         )
     primary = candidate_peaks[0]
-    remove_freqs = [primary.frequency]
-    if include_harmonic:
-        remove_freqs.append(2.0 * primary.frequency)
-    prewhiten_model, _ = fit_sinusoids(t, y_analysis, dy, remove_freqs)
+    if prewhiten_periods:
+        prewhiten_base_periods = prewhiten_periods
+    else:
+        prewhiten_base_periods = [primary.period]
+    prewhiten_terms = prewhitening_terms_from_periods(prewhiten_base_periods, peaks, include_harmonic)
+    prewhiten_model, prewhitening_table = fit_sinusoids_with_terms(t, y_analysis, dy, prewhiten_terms)
     residuals = y_analysis - prewhiten_model
     residual_power, residual_ls, residual_peaks = find_lomb_scargle_peaks(
         t, residuals, dy, freq, max_peaks, min_considered_period=min_considered_period
@@ -670,6 +749,9 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "t0": t0,
         "excluded_periods": excluded_periods,
         "exclusion_tolerance": exclusion_tolerance,
+        "prewhiten_periods": prewhiten_base_periods,
+        "prewhitening_terms": prewhitening_table,
+        "window_peaks": window_peaks,
         "peaks": [asdict(p) for p in peaks],
         "residual_peaks": [asdict(p) for p in residual_peaks],
         "folded_maxima": [{"phase": ph, "flux": val} for ph, val in folded["maxima"]],
@@ -689,7 +771,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         },
         "plots": {
             "periodogram": make_periodogram_plot(freq, power, peaks, "Lomb-Scargle periodogram"),
-            "window": make_window_plot(freq, win, peaks),
+            "window": make_window_plot(freq, win, window_peaks),
             "prewhitened": make_periodogram_plot(freq, residual_power, residual_peaks, "After prewhitening"),
             "folded": make_folded_plot(folded),
         },

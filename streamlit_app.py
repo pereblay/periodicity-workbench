@@ -33,6 +33,19 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def window_peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "period_d": peak["period"],
+                "frequency_c_d": peak["frequency"],
+                "window_power": peak["power"],
+            }
+            for peak in peaks
+        ]
+    )
+
+
 def period_options_from_result(result: dict | None, key: str) -> dict[str, float]:
     if result is None:
         return {}
@@ -42,6 +55,20 @@ def period_options_from_result(result: dict | None, key: str) -> dict[str, float
             continue
         label = f"{peak['label']} - {peak['period']:.4f} d ({peak['kind']})"
         options[label] = float(peak["period"])
+    return options
+
+
+def period_select_options_from_result(result: dict | None, key: str) -> dict[float, str]:
+    if result is None:
+        return {}
+    options: dict[float, str] = {}
+    for peak in result.get(key, []):
+        if "artefact" in peak["kind"] or "excluded" in peak["kind"]:
+            continue
+        period = float(peak["period"])
+        if any(abs(period - old) <= 1e-5 * max(period, old) for old in options):
+            continue
+        options[period] = f"{peak['label']} - {period:.4f} d ({peak['kind']})"
     return options
 
 
@@ -146,9 +173,8 @@ def window_figure(result: dict) -> go.Figure:
             hovertemplate="Period=%{x:.6f} d<br>Window power=%{y:.6g}<extra></extra>",
         )
     )
-    for peak in result["peaks"]:
-        if peak["window_period"] is not None:
-            fig.add_vline(x=peak["window_period"], line_dash="dash", line_color="#b13b32", opacity=0.75)
+    for peak in result.get("window_peaks", []):
+        fig.add_vline(x=peak["period"], line_dash="dash", line_color="#b13b32", opacity=0.35)
     fig.update_layout(
         title="Sampling window",
         xaxis_title="Period [d]",
@@ -224,6 +250,12 @@ def render_results(result: dict) -> None:
 
     st.subheader("After prewhitening")
     st.dataframe(peaks_dataframe(result["residual_peaks"]), use_container_width=True, hide_index=True)
+
+    st.subheader("Sampling-window peaks")
+    st.dataframe(window_peaks_dataframe(result.get("window_peaks", [])), use_container_width=True, hide_index=True)
+
+    st.subheader("Prewhitening terms")
+    st.dataframe(pd.DataFrame(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
 
     st.subheader("Folded-profile maxima")
     st.dataframe(pd.DataFrame(result["folded_maxima"]), use_container_width=True, hide_index=True)
@@ -371,6 +403,33 @@ with st.sidebar:
     if excluded_period_values:
         st.caption("Excluded periods: " + ", ".join(f"{period:.4f} d" for period in excluded_period_values))
 
+    st.subheader("Iterative Prewhitening")
+    if "prewhitening_periods" not in st.session_state:
+        st.session_state["prewhitening_periods"] = []
+    prewhitening_periods = list(st.session_state["prewhitening_periods"])
+    prewhitening_options = period_select_options_from_result(st.session_state.get("last_result"), "residual_peaks")
+    if not prewhitening_options:
+        prewhitening_options = period_select_options_from_result(st.session_state.get("last_result"), "peaks")
+    if prewhitening_options:
+        next_prewhitening_period = st.selectbox(
+            "Next period to remove",
+            options=list(prewhitening_options.keys()),
+            format_func=lambda period: prewhitening_options.get(period, f"{period:.4f} d"),
+            index=None,
+            placeholder="Choose a detected period",
+        )
+    else:
+        next_prewhitening_period = None
+        st.caption("Run an analysis to populate prewhitening candidates.")
+    if prewhitening_periods:
+        st.caption("Current prewhitening chain: " + ", ".join(f"{period:.4f} d" for period in prewhitening_periods))
+    next_prewhitening = st.button(
+        "Next prewhitening step",
+        use_container_width=True,
+        help="Add the selected period and recompute the residual periodogram. Detected harmonics are included only when they appear as non-artefact peaks.",
+    )
+    clear_prewhitening = st.button("Clear prewhitening chain", use_container_width=True)
+
     apply_exclusions = st.button(
         "Apply exclusions",
         use_container_width=True,
@@ -407,11 +466,83 @@ def current_fields(bootstrap_value: int | None = None) -> dict[str, str]:
         fields["fold_fit_periods"] = ",".join(f"{period:.12g}" for period in selected_period_values)
     if excluded_period_values:
         fields["excluded_periods"] = ",".join(f"{period:.12g}" for period in excluded_period_values)
+    prewhitening_periods_for_fields = st.session_state.get("prewhitening_periods", [])
+    if prewhitening_periods_for_fields:
+        fields["prewhiten_periods"] = ",".join(f"{period:.12g}" for period in prewhitening_periods_for_fields)
     if t0_text.strip():
         fields["t0"] = t0_text.strip()
     if include_harmonic:
         fields["include_harmonic"] = "on"
     return fields
+
+
+def current_live_signature() -> tuple[int, float]:
+    return int(max_peaks), float(min_considered_period)
+
+
+def run_with_last_file(fields: dict[str, str], spinner_text: str) -> dict:
+    file_bytes = st.session_state.get("last_file_bytes")
+    filename = st.session_state.get("last_filename", "uploaded.dat")
+    if file_bytes is None:
+        raise ValueError("Run an analysis with an uploaded file first.")
+    with st.spinner(spinner_text):
+        return run_analysis(fields, file_bytes, filename)
+
+
+if clear_prewhitening:
+    st.session_state["prewhitening_periods"] = []
+    if "last_file_bytes" in st.session_state:
+        try:
+            fields = current_fields(bootstrap_value=0)
+            result = run_with_last_file(fields, "Clearing prewhitening chain...")
+        except Exception as exc:
+            st.error(str(exc))
+            st.stop()
+        st.session_state["last_result"] = result
+        st.session_state["last_fields"] = fields
+        st.session_state["last_live_signature"] = current_live_signature()
+        st.rerun()
+
+
+if next_prewhitening:
+    if next_prewhitening_period is None:
+        st.error("Choose a detected period before adding a prewhitening step.")
+        st.stop()
+    st.session_state["prewhitening_periods"] = unique_periods(
+        list(st.session_state.get("prewhitening_periods", [])) + [float(next_prewhitening_period)]
+    )
+    try:
+        fields = current_fields(bootstrap_value=0)
+        result = run_with_last_file(fields, "Running next prewhitening step...")
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
+    st.session_state["last_result"] = result
+    st.session_state["last_fields"] = fields
+    st.session_state["last_live_signature"] = current_live_signature()
+    st.rerun()
+
+
+if (
+    "last_file_bytes" in st.session_state
+    and not run
+    and not apply_exclusions
+    and not next_prewhitening
+    and not clear_prewhitening
+):
+    live_signature = current_live_signature()
+    previous_signature = st.session_state.get("last_live_signature")
+    if previous_signature is not None and live_signature != previous_signature:
+        try:
+            fields = current_fields(bootstrap_value=0)
+            result = run_with_last_file(fields, "Updating peak selection...")
+        except Exception as exc:
+            st.error(str(exc))
+            st.stop()
+        st.session_state["last_result"] = result
+        st.session_state["last_fields"] = fields
+        st.session_state["last_live_signature"] = live_signature
+        st.rerun()
 
 
 if run:
@@ -431,24 +562,19 @@ if run:
     st.session_state["last_file_bytes"] = uploaded.getvalue()
     st.session_state["last_filename"] = uploaded.name
     st.session_state["last_fields"] = fields
+    st.session_state["last_live_signature"] = current_live_signature()
     st.rerun()
 
 if apply_exclusions:
-    file_bytes = st.session_state.get("last_file_bytes")
-    filename = st.session_state.get("last_filename", "uploaded.dat")
-    if file_bytes is None:
-        st.error("Run an analysis with an uploaded file before applying exclusions.")
-        st.stop()
-
     fields = current_fields(bootstrap_value=0)
-    with st.spinner("Applying manual exclusions..."):
-        try:
-            result = run_analysis(fields, file_bytes, filename)
-        except Exception as exc:
-            st.error(str(exc))
-            st.stop()
+    try:
+        result = run_with_last_file(fields, "Applying manual exclusions...")
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
     st.session_state["last_result"] = result
     st.session_state["last_fields"] = fields
+    st.session_state["last_live_signature"] = current_live_signature()
 
 if "last_result" in st.session_state:
     if not run and not apply_exclusions:
