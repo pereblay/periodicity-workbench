@@ -419,8 +419,12 @@ def fit_sinusoids_with_terms(
         rows.append(
             {
                 "label": str(term["label"]),
+                "main_period": term.get("main_period"),
+                "main_period_error": term.get("main_period_error"),
                 "period": float(1.0 / float(term["frequency"])),
+                "period_error": term.get("period_error"),
                 "frequency": float(term["frequency"]),
+                "frequency_error": term.get("frequency_error"),
                 "amplitude": amplitude,
                 "amplitude_error": amplitude_error,
             }
@@ -439,6 +443,16 @@ def detected_harmonic_for_period(period: float, peaks: list[PeakSummary], tolera
     return max(candidates, key=lambda peak: peak.power)
 
 
+def matching_peak_for_period(period: float, peaks: list[PeakSummary], tolerance: float = 0.04) -> PeakSummary | None:
+    candidates = [
+        peak for peak in peaks
+        if abs(peak.period - period) <= tolerance * max(peak.period, period)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda peak: peak.power)
+
+
 def prewhitening_terms_from_periods(
     periods: list[float],
     peaks: list[PeakSummary],
@@ -446,11 +460,30 @@ def prewhitening_terms_from_periods(
 ) -> list[dict[str, float | str]]:
     terms: list[dict[str, float | str]] = []
     for idx, period in enumerate(periods, start=1):
-        terms.append({"label": f"step {idx}", "frequency": 1.0 / period})
+        main_peak = matching_peak_for_period(period, peaks)
+        terms.append(
+            {
+                "label": f"step {idx}",
+                "frequency": main_peak.frequency if main_peak is not None else 1.0 / period,
+                "main_period": main_peak.period if main_peak is not None else period,
+                "main_period_error": None if main_peak is None else main_peak.period_error,
+                "period_error": None if main_peak is None else main_peak.period_error,
+                "frequency_error": None if main_peak is None else main_peak.frequency_error,
+            }
+        )
         if include_harmonic:
             harmonic = detected_harmonic_for_period(period, peaks)
             if harmonic is not None:
-                terms.append({"label": f"step {idx} detected P/2 harmonic", "frequency": harmonic.frequency})
+                terms.append(
+                    {
+                        "label": f"step {idx} detected P/2 harmonic",
+                        "frequency": harmonic.frequency,
+                        "main_period": main_peak.period if main_peak is not None else period,
+                        "main_period_error": None if main_peak is None else main_peak.period_error,
+                        "period_error": harmonic.period_error,
+                        "frequency_error": harmonic.frequency_error,
+                    }
+                )
     return terms
 
 
