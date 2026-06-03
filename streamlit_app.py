@@ -52,6 +52,76 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df.where(pd.notna(df), "")
 
 
+def download_dataframe_button(label: str, df: pd.DataFrame, filename: str, key: str) -> None:
+    st.download_button(
+        label=label,
+        data=df.to_csv(sep="\t", index=False, na_rep="", float_format="%.12g"),
+        file_name=filename,
+        mime="text/plain",
+        key=key,
+        use_container_width=True,
+    )
+
+
+def periodogram_plot_dataframe(result: dict, power_key: str, power_label: str) -> pd.DataFrame:
+    series = result["series"]
+    return pd.DataFrame(
+        {
+            "period": series["period"],
+            "frequency": series["frequency"],
+            power_label: series[power_key],
+        }
+    )
+
+
+def folded_plot_dataframe(result: dict) -> pd.DataFrame:
+    series = result["series"]
+    bin_rows = []
+    for offset in [0.0, 1.0]:
+        for phase, flux, error in zip(series["fold_phase"], series["fold_flux"], series["fold_error"]):
+            bin_rows.append(
+                {
+                    "trace": "folded_bin",
+                    "phase": phase + offset,
+                    "flux": flux,
+                    "error": error,
+                }
+            )
+    model_rows = [
+        {
+            "trace": "model",
+            "phase": phase,
+            "flux": flux,
+            "error": None,
+        }
+        for phase, flux in zip(series["fold_model_phase"], series["fold_model_flux"])
+    ]
+    return pd.DataFrame(bin_rows + model_rows)
+
+
+def light_curve_model_dataframe(result: dict) -> pd.DataFrame:
+    series = result["series"]
+    data_rows = [
+        {
+            "trace": "data",
+            "time": time,
+            "flux": flux,
+            "error": error,
+        }
+        for time, flux, error in zip(series["time"], series["flux"], series["error"])
+    ]
+    model_rows = [
+        {
+            "trace": "model",
+            "time": time,
+            "flux": flux,
+            "error": None,
+        }
+        for time, flux in zip(series["time"], series["prewhitening_model_flux"])
+    ]
+    return pd.DataFrame(data_rows + model_rows)
+
+
 def window_peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -291,10 +361,28 @@ def render_results(result: dict) -> None:
     top_plot_cols = st.columns(3)
     with top_plot_cols[0]:
         st.plotly_chart(periodogram_figure(result, "power", "Lomb-Scargle periodogram", "peaks"), use_container_width=True)
+        download_dataframe_button(
+            "Download plot data",
+            periodogram_plot_dataframe(result, "power", "power"),
+            "lomb_scargle_periodogram.txt",
+            "download_lomb_scargle_periodogram",
+        )
     with top_plot_cols[1]:
         st.plotly_chart(window_figure(result), use_container_width=True)
+        download_dataframe_button(
+            "Download plot data",
+            periodogram_plot_dataframe(result, "window_power", "window_power"),
+            "sampling_window.txt",
+            "download_sampling_window",
+        )
     with top_plot_cols[2]:
         st.plotly_chart(folded_figure(result), use_container_width=True)
+        download_dataframe_button(
+            "Download plot data",
+            folded_plot_dataframe(result),
+            "folded_profile.txt",
+            "download_folded_profile",
+        )
 
     st.subheader("Detected peaks")
     st.dataframe(peaks_dataframe(result["peaks"]), use_container_width=True, hide_index=True)
@@ -306,6 +394,12 @@ def render_results(result: dict) -> None:
             st.plotly_chart(
                 periodogram_figure(result, "residual_power", "After prewhitening", "residual_peaks"),
                 use_container_width=True,
+            )
+            download_dataframe_button(
+                "Download plot data",
+                periodogram_plot_dataframe(result, "residual_power", "residual_power"),
+                "prewhitened_periodogram.txt",
+                "download_prewhitened_periodogram",
             )
         else:
             st.info("No prewhitening step has been applied yet.")
@@ -335,6 +429,12 @@ def render_results(result: dict) -> None:
     if st.session_state.get("show_prewhitening_model"):
         if result.get("has_prewhitening"):
             st.plotly_chart(prewhitening_model_figure(result), use_container_width=True)
+            download_dataframe_button(
+                "Download plot data",
+                light_curve_model_dataframe(result),
+                "prewhitening_model_light_curve.txt",
+                "download_prewhitening_model_light_curve",
+            )
         else:
             st.info("Add at least one prewhitening step before showing the model.")
 
