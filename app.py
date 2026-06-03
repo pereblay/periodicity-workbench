@@ -679,6 +679,73 @@ def make_folded_plot(folded) -> str:
     return fig_to_data_uri(fig)
 
 
+def empty_folded_payload() -> dict:
+    return {
+        "phase": np.asarray([], dtype=float),
+        "flux": np.asarray([], dtype=float),
+        "error": np.asarray([], dtype=float),
+        "model_phase": np.asarray([], dtype=float),
+        "model_flux": np.asarray([], dtype=float),
+        "maxima": [],
+    }
+
+
+def empty_analysis_result(
+    t: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    freq: np.ndarray,
+    power: np.ndarray,
+    win: np.ndarray,
+    window_peaks: list[dict[str, float]],
+    message: str,
+) -> dict:
+    period = 1.0 / freq
+    residual_power = np.zeros_like(power)
+    folded = empty_folded_payload()
+    return {
+        "analysis_message": message,
+        "n_points": len(t),
+        "baseline": float(t.max() - t.min()),
+        "primary_period": None,
+        "folded_period": None,
+        "t0": float(t[0]),
+        "excluded_periods": [],
+        "exclusion_tolerance": None,
+        "has_prewhitening": False,
+        "prewhiten_periods": [],
+        "prewhitening_terms": [],
+        "window_peaks": window_peaks,
+        "peaks": [],
+        "residual_peaks": [],
+        "folded_maxima": [],
+        "fold_fit_periods": [],
+        "fold_fit_ratios": [],
+        "series": {
+            "period": period.tolist(),
+            "frequency": freq.tolist(),
+            "power": power.tolist(),
+            "window_power": win.tolist(),
+            "residual_power": residual_power.tolist(),
+            "time": t.tolist(),
+            "flux": y.tolist(),
+            "error": dy.tolist(),
+            "prewhitening_model_flux": y.tolist(),
+            "fold_phase": [],
+            "fold_flux": [],
+            "fold_error": [],
+            "fold_model_phase": [],
+            "fold_model_flux": [],
+        },
+        "plots": {
+            "periodogram": make_periodogram_plot(freq, power, [], "Lomb-Scargle periodogram"),
+            "window": make_window_plot(freq, win, window_peaks),
+            "prewhitened": make_periodogram_plot(freq, residual_power, [], "After prewhitening"),
+            "folded": make_folded_plot(folded),
+        },
+    }
+
+
 def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "uploaded.dat") -> dict:
     time_col = int(fields.get("time_col", "1")) - 1
     flux_col = int(fields.get("flux_col", "2")) - 1
@@ -741,10 +808,17 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
 
     candidate_peaks = usable_candidate_peaks(peaks)
     if not candidate_peaks:
-        raise ValueError(
+        return empty_analysis_result(
+            t,
+            y,
+            dy,
+            freq,
+            power,
+            win,
+            window_peaks,
             "No usable candidate peak remains after sampling-window/manual filtering. "
             "Try lowering the frequency range, increasing the sampling-window artefact threshold, "
-            "or removing some manual exclusions."
+            "or removing some manual exclusions.",
         )
     primary = candidate_peaks[0]
     prewhiten_base_periods = prewhiten_periods
@@ -838,6 +912,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
 
 
 def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
+    if result.get("primary_period") is None:
+        raise ValueError("No folded profile can be updated because no candidate period was found.")
     primary_period = float(result["primary_period"])
     fold_bins = int(fields.get("fold_bins", "10"))
     series = result["series"]

@@ -365,11 +365,16 @@ def prewhitening_model_figure(result: dict) -> go.Figure:
 
 
 def render_results(result: dict) -> None:
+    if result.get("analysis_message"):
+        st.warning(result["analysis_message"])
+
     metric_cols = st.columns(4)
     metric_cols[0].metric("Rows used", f"{result['n_points']}")
     metric_cols[1].metric("Baseline", f"{result['baseline']:.1f} d")
-    metric_cols[2].metric("Primary period", f"{result['primary_period']:.4f} d")
-    metric_cols[3].metric("Folded period", f"{result.get('folded_period', result['primary_period']):.4f} d")
+    primary_period = result.get("primary_period")
+    folded_period = result.get("folded_period")
+    metric_cols[2].metric("Primary period", "" if primary_period is None else f"{primary_period:.4f} d")
+    metric_cols[3].metric("Folded period", "" if folded_period is None else f"{folded_period:.4f} d")
 
     top_plot_cols = st.columns(3)
     with top_plot_cols[0]:
@@ -469,6 +474,8 @@ with st.sidebar:
     time_col = col_a.number_input("Time", min_value=1, value=1, step=1)
     flux_col = col_b.number_input("Flux", min_value=1, value=2, step=1)
     error_col = col_c.number_input("Error", min_value=1, value=3, step=1)
+
+    run = st.button("Run analysis", type="primary", use_container_width=True)
 
     st.subheader("Frequency Search")
     fmin = st.number_input("Min frequency [cycles/day]", min_value=0.0, value=0.01, step=0.001, format="%.6f")
@@ -628,8 +635,6 @@ with st.sidebar:
         help="Show the model fitted to the original light curve using all periods accumulated in the prewhitening table.",
     )
     clear_prewhitening = st.button("Clear prewhitening chain", use_container_width=True)
-
-    run = st.button("Run analysis", type="primary", use_container_width=True)
 
 
 if uploaded is not None:
