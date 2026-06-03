@@ -476,10 +476,10 @@ def render_results(result: dict) -> None:
     st.subheader("Detected peaks")
     st.dataframe(peaks_dataframe(result["peaks"]), use_container_width=True, hide_index=True)
 
-    st.subheader("Prewhitening")
-    prewhitening_cols = st.columns([1.3, 1.0])
-    with prewhitening_cols[0]:
-        if result.get("has_prewhitening"):
+    if result.get("has_prewhitening"):
+        st.subheader("Prewhitening")
+        prewhitening_cols = st.columns([1.3, 1.0])
+        with prewhitening_cols[0]:
             st.plotly_chart(
                 periodogram_figure(result, "residual_power", "After prewhitening", "residual_peaks"),
                 use_container_width=True,
@@ -490,15 +490,10 @@ def render_results(result: dict) -> None:
                 "prewhitened_periodogram.txt",
                 "download_prewhitened_periodogram",
             )
-        else:
-            st.info("No prewhitening step has been applied yet.")
-    with prewhitening_cols[1]:
-        st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), use_container_width=True, hide_index=True)
-        st.caption("Residual Lomb-Scargle peak summary")
-        if result.get("has_prewhitening"):
+        with prewhitening_cols[1]:
+            st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), use_container_width=True, hide_index=True)
+            st.caption("Residual Lomb-Scargle peak summary")
             st.dataframe(lomb_scargle_summary_dataframe(result["residual_peaks"]), use_container_width=True, hide_index=True)
-        else:
-            st.info("Residual peaks will appear after the first prewhitening step.")
 
     st.subheader("Folded-profile maxima")
     st.dataframe(pd.DataFrame(result["folded_maxima"]), use_container_width=True, hide_index=True)
