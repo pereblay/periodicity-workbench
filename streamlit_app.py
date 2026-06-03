@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app import run_analysis, update_folded_profile
+from app import run_analysis, sliding_lomb_scargle, update_folded_profile
 
 
 st.set_page_config(
@@ -120,6 +120,29 @@ def light_curve_model_dataframe(result: dict) -> pd.DataFrame:
         for time, flux in zip(series["time"], series["prewhitening_model_flux"])
     ]
     return pd.DataFrame(data_rows + model_rows)
+
+
+def advanced_map_dataframe(advanced_result: dict) -> pd.DataFrame:
+    periods = advanced_result.get("period", [])
+    times = advanced_result.get("time", [])
+    values = advanced_result.get("values", [])
+    metric = advanced_result.get("metric", "value")
+    rows = []
+    for time, row in zip(times, values):
+        for period, value in zip(periods, row):
+            rows.append({"time": time, "period": period, metric: value})
+    return pd.DataFrame(rows)
+
+
+def advanced_best_dataframe(advanced_result: dict) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "time": advanced_result.get("time", []),
+            "best_period": advanced_result.get("best_period", []),
+            "best_value": advanced_result.get("best_value", []),
+            "n_points": advanced_result.get("counts", []),
+        }
+    )
 
 
 def window_peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
@@ -376,6 +399,42 @@ def prewhitening_model_figure(result: dict) -> go.Figure:
     return apply_plot_frame(fig)
 
 
+def advanced_tomographic_figure(advanced_result: dict) -> go.Figure:
+    metric = advanced_result.get("metric", "power")
+    fig = go.Figure()
+    fig.add_trace(
+        go.Heatmap(
+            x=advanced_result.get("period", []),
+            y=advanced_result.get("time", []),
+            z=advanced_result.get("values", []),
+            colorscale="Viridis",
+            colorbar=dict(title=metric),
+            hovertemplate="Period=%{x:.6g} d<br>Time=%{y:.6g}<br>" + metric + "=%{z:.6g}<extra></extra>",
+        )
+    )
+    if advanced_result.get("best_period"):
+        fig.add_trace(
+            go.Scatter(
+                x=advanced_result["best_period"],
+                y=advanced_result["time"],
+                mode="lines+markers",
+                line=dict(color="white", width=2),
+                marker=dict(color="white", size=4),
+                name="Best period",
+                hovertemplate="Best period=%{x:.6g} d<br>Time=%{y:.6g}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        title="Sliding Lomb-Scargle tomographic map",
+        xaxis_title="Period [d]",
+        yaxis_title="Window center time",
+        height=520,
+        margin=dict(l=20, r=20, t=50, b=20),
+        showlegend=False,
+    )
+    return apply_plot_frame(fig)
+
+
 def render_results(result: dict) -> None:
     if result.get("analysis_message"):
         st.warning(result["analysis_message"])
@@ -467,6 +526,29 @@ def render_results(result: dict) -> None:
             )
         else:
             st.info("Add at least one prewhitening step before showing the model.")
+
+    advanced_result = st.session_state.get("advanced_result")
+    if advanced_result:
+        st.subheader("Advanced Mode")
+        if advanced_result.get("message"):
+            st.warning(advanced_result["message"])
+        st.plotly_chart(advanced_tomographic_figure(advanced_result), use_container_width=True)
+        adv_cols = st.columns(2)
+        with adv_cols[0]:
+            download_dataframe_button(
+                "Download tomographic map",
+                advanced_map_dataframe(advanced_result),
+                "advanced_sliding_lomb_scargle_map.txt",
+                "download_advanced_map",
+            )
+        with adv_cols[1]:
+            download_dataframe_button(
+                "Download best-period track",
+                advanced_best_dataframe(advanced_result),
+                "advanced_sliding_lomb_scargle_best_period.txt",
+                "download_advanced_best",
+            )
+        st.dataframe(clean_dataframe(advanced_best_dataframe(advanced_result)), use_container_width=True, hide_index=True)
 
 
 st.title("Periodicity Workbench")
@@ -648,6 +730,43 @@ with st.sidebar:
     )
     clear_prewhitening = st.button("Clear prewhitening chain", use_container_width=True)
 
+    st.subheader("Advanced Mode")
+    advanced_method = st.radio(
+        "Method",
+        ["v1 Sliding LS tomographic map", "v2 WWZ map"],
+        horizontal=False,
+    )
+    previous_result = st.session_state.get("last_result")
+    baseline_hint = float(previous_result["baseline"]) if previous_result else 100.0
+    period_max_hint = 1.0 / fmin if fmin > 0 else baseline_hint / 3.0
+    suggested_window = max(3.0 * period_max_hint, baseline_hint / 8.0)
+    suggested_window = min(max(suggested_window, baseline_hint / 20.0), baseline_hint)
+    st.caption(
+        f"Suggested window: {suggested_window:.1f} d; suggested step: {max(suggested_window / 4.0, 1.0):.1f} d."
+    )
+    advanced_fmin = st.number_input("Advanced min frequency [cycles/day]", min_value=0.0, value=float(fmin), step=0.001, format="%.6f")
+    advanced_fmax = st.number_input("Advanced max frequency [cycles/day]", min_value=0.0, value=float(fmax), step=0.01, format="%.6f")
+    advanced_period_bins = st.number_input("Advanced period bins", min_value=20, max_value=1000, value=200, step=20)
+    advanced_window_width = st.number_input(
+        "Sliding window width [d]",
+        min_value=0.0,
+        value=float(suggested_window),
+        step=max(1.0, float(suggested_window) / 20.0),
+        format="%.3f",
+    )
+    advanced_window_step = st.number_input(
+        "Sliding window step [d]",
+        min_value=0.0,
+        value=float(max(suggested_window / 4.0, 1.0)),
+        step=max(1.0, float(suggested_window) / 40.0),
+        format="%.3f",
+    )
+    advanced_min_points = st.number_input("Minimum points per window", min_value=3, value=30, step=5)
+    advanced_metric = st.selectbox("Color metric", ["power", "amplitude"])
+    if advanced_method == "v2 WWZ map":
+        st.info("WWZ will be added next; v1 Sliding LS is available now.")
+    run_advanced = st.button("Run advanced map", use_container_width=True)
+
 
 if uploaded is not None:
     with st.expander("File preview", expanded=False):
@@ -672,6 +791,13 @@ def current_fields(bootstrap_value: int | None = None) -> dict[str, str]:
         "fold_fit_mode": "selected" if fold_fit_mode == "Selected periods" else "harmonics",
         "fold_fit_harmonics": str(fold_fit_harmonics),
         "exclusion_tolerance": str(exclusion_tolerance),
+        "advanced_fmin": str(advanced_fmin),
+        "advanced_fmax": str(advanced_fmax),
+        "advanced_period_bins": str(advanced_period_bins),
+        "advanced_window_width": str(advanced_window_width),
+        "advanced_window_step": str(advanced_window_step),
+        "advanced_min_points": str(advanced_min_points),
+        "advanced_metric": str(advanced_metric),
     }
     if selected_period_values:
         fields["fold_fit_periods"] = ",".join(f"{period:.12g}" for period in selected_period_values)
@@ -769,6 +895,23 @@ if show_model:
     st.session_state["show_prewhitening_model"] = True
 
 
+if run_advanced:
+    if "last_result" not in st.session_state:
+        st.error("Run an analysis before running Advanced mode.")
+        st.stop()
+    if advanced_method == "v2 WWZ map":
+        st.error("WWZ mode is not implemented yet. Select v1 Sliding LS tomographic map.")
+        st.stop()
+    try:
+        fields = current_fields(bootstrap_value=0)
+        with st.spinner("Running sliding Lomb-Scargle map..."):
+            st.session_state["advanced_result"] = sliding_lomb_scargle(st.session_state["last_result"], fields)
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
+    st.rerun()
+
+
 if (
     "last_file_bytes" in st.session_state
     and not run
@@ -778,6 +921,7 @@ if (
     and not show_model
     and not update_folded
     and not update_uncertainties
+    and not run_advanced
 ):
     live_signature = current_live_signature()
     previous_signature = st.session_state.get("last_live_signature")
@@ -812,6 +956,7 @@ if run:
     st.session_state["last_filename"] = uploaded.name
     st.session_state["last_fields"] = fields
     st.session_state["last_live_signature"] = current_live_signature()
+    st.session_state.pop("advanced_result", None)
     st.rerun()
 
 if apply_exclusions:

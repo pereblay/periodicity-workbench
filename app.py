@@ -966,6 +966,93 @@ def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
     return updated
 
 
+def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
+    series = result["series"]
+    t = np.asarray(series["time"], dtype=float)
+    y = np.asarray(series["flux"], dtype=float)
+    dy = np.asarray(series["error"], dtype=float)
+    fmin = float(fields.get("advanced_fmin", fields.get("fmin", "0.01")))
+    fmax = float(fields.get("advanced_fmax", fields.get("fmax", "1.0")))
+    if fmin <= 0 or fmax <= fmin:
+        raise ValueError("Advanced frequency range must satisfy 0 < min frequency < max frequency")
+    period_min = 1.0 / fmax
+    period_max = 1.0 / fmin
+    n_periods = int(fields.get("advanced_period_bins", "200"))
+    if n_periods < 20:
+        raise ValueError("Advanced period bins must be at least 20")
+    period_axis = np.linspace(period_min, period_max, n_periods)
+    frequency = 1.0 / period_axis
+
+    baseline = float(t.max() - t.min())
+    window_width = float(fields.get("advanced_window_width", max(period_max * 3.0, baseline / 8.0)))
+    window_step = float(fields.get("advanced_window_step", window_width / 4.0))
+    min_points = int(fields.get("advanced_min_points", "30"))
+    metric = fields.get("advanced_metric", "power")
+    if window_width <= 0 or window_step <= 0:
+        raise ValueError("Advanced window width and step must be positive")
+    if min_points < 3:
+        raise ValueError("Advanced minimum points per window must be at least 3")
+    if metric not in {"power", "amplitude"}:
+        raise ValueError("Advanced metric must be 'power' or 'amplitude'")
+
+    start = float(t.min() + 0.5 * window_width)
+    stop = float(t.max() - 0.5 * window_width)
+    if stop < start:
+        centers = np.asarray([0.5 * (t.min() + t.max())])
+    else:
+        centers = np.arange(start, stop + 0.5 * window_step, window_step)
+
+    rows = []
+    valid_centers = []
+    counts = []
+    best_periods = []
+    best_values = []
+    for center in centers:
+        mask = (t >= center - 0.5 * window_width) & (t <= center + 0.5 * window_width)
+        n_local = int(mask.sum())
+        if n_local < min_points:
+            continue
+        tw, yw, dyw = t[mask], y[mask], dy[mask]
+        yw = yw - weighted_median(yw, 1.0 / dyw**2)
+        ls = LombScargle(tw, yw, dyw, center_data=True, fit_mean=True)
+        if metric == "amplitude":
+            values = np.empty_like(frequency)
+            for idx, freq in enumerate(frequency):
+                params = ls.model_parameters(freq)
+                values[idx] = float(np.hypot(params[-2], params[-1]))
+        else:
+            values = ls.power(frequency)
+        rows.append(values)
+        valid_centers.append(float(center))
+        counts.append(n_local)
+        best_idx = int(np.nanargmax(values))
+        best_periods.append(float(period_axis[best_idx]))
+        best_values.append(float(values[best_idx]))
+
+    if rows:
+        matrix = np.vstack(rows)
+        message = ""
+    else:
+        matrix = np.empty((0, len(period_axis)))
+        message = "No sliding windows had enough points for the selected settings."
+
+    return {
+        "method": "sliding_lomb_scargle",
+        "metric": metric,
+        "window_width": window_width,
+        "window_step": window_step,
+        "min_points": min_points,
+        "period": period_axis.tolist(),
+        "frequency": frequency.tolist(),
+        "time": valid_centers,
+        "values": matrix.tolist(),
+        "counts": counts,
+        "best_period": best_periods,
+        "best_value": best_values,
+        "message": message,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, content_type: str, body: bytes) -> None:
         self.send_response(status)
