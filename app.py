@@ -966,11 +966,8 @@ def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
     return updated
 
 
-def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
-    series = result["series"]
-    t = np.asarray(series["time"], dtype=float)
-    y = np.asarray(series["flux"], dtype=float)
-    dy = np.asarray(series["error"], dtype=float)
+def advanced_grid(result: dict, fields: dict[str, str]) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float, int]:
+    t = np.asarray(result["series"]["time"], dtype=float)
     fmin = float(fields.get("advanced_fmin", fields.get("fmin", "0.01")))
     fmax = float(fields.get("advanced_fmax", fields.get("fmax", "1.0")))
     if fmin <= 0 or fmax <= fmin:
@@ -987,13 +984,10 @@ def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
     window_width = float(fields.get("advanced_window_width", max(period_max * 3.0, baseline / 8.0)))
     window_step = float(fields.get("advanced_window_step", window_width / 4.0))
     min_points = int(fields.get("advanced_min_points", "30"))
-    metric = fields.get("advanced_metric", "power")
     if window_width <= 0 or window_step <= 0:
         raise ValueError("Advanced window width and step must be positive")
     if min_points < 3:
         raise ValueError("Advanced minimum points per window must be at least 3")
-    if metric not in {"power", "amplitude"}:
-        raise ValueError("Advanced metric must be 'power' or 'amplitude'")
 
     start = float(t.min() + 0.5 * window_width)
     stop = float(t.max() - 0.5 * window_width)
@@ -1001,6 +995,47 @@ def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
         centers = np.asarray([0.5 * (t.min() + t.max())])
     else:
         centers = np.arange(start, stop + 0.5 * window_step, window_step)
+    return period_axis, frequency, centers, window_width, window_step, min_points
+
+
+def empty_advanced_result(
+    method: str,
+    method_label: str,
+    metric: str,
+    period_axis: np.ndarray,
+    frequency: np.ndarray,
+    window_width: float,
+    window_step: float,
+    min_points: int,
+    message: str,
+) -> dict:
+    return {
+        "method": method,
+        "method_label": method_label,
+        "metric": metric,
+        "window_width": window_width,
+        "window_step": window_step,
+        "min_points": min_points,
+        "period": period_axis.tolist(),
+        "frequency": frequency.tolist(),
+        "time": [],
+        "values": np.empty((0, len(period_axis))).tolist(),
+        "counts": [],
+        "best_period": [],
+        "best_value": [],
+        "message": message,
+    }
+
+
+def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
+    series = result["series"]
+    t = np.asarray(series["time"], dtype=float)
+    y = np.asarray(series["flux"], dtype=float)
+    dy = np.asarray(series["error"], dtype=float)
+    period_axis, frequency, centers, window_width, window_step, min_points = advanced_grid(result, fields)
+    metric = fields.get("advanced_metric", "power")
+    if metric not in {"power", "amplitude"}:
+        raise ValueError("Advanced metric must be 'power' or 'amplitude'")
 
     rows = []
     valid_centers = []
@@ -1033,11 +1068,21 @@ def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
         matrix = np.vstack(rows)
         message = ""
     else:
-        matrix = np.empty((0, len(period_axis)))
-        message = "No sliding windows had enough points for the selected settings."
+        return empty_advanced_result(
+            "sliding_lomb_scargle",
+            "Sliding Lomb-Scargle tomographic map",
+            metric,
+            period_axis,
+            frequency,
+            window_width,
+            window_step,
+            min_points,
+            "No sliding windows had enough points for the selected settings.",
+        )
 
     return {
         "method": "sliding_lomb_scargle",
+        "method_label": "Sliding Lomb-Scargle tomographic map",
         "metric": metric,
         "window_width": window_width,
         "window_step": window_step,
@@ -1051,6 +1096,103 @@ def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
         "best_value": best_values,
         "message": message,
     }
+
+
+def wwz_map(result: dict, fields: dict[str, str]) -> dict:
+    series = result["series"]
+    t = np.asarray(series["time"], dtype=float)
+    y = np.asarray(series["flux"], dtype=float)
+    dy = np.asarray(series["error"], dtype=float)
+    period_axis, frequency, centers, window_width, window_step, min_points = advanced_grid(result, fields)
+    decay = float(fields.get("advanced_wwz_decay", "0.0125"))
+    if decay <= 0:
+        raise ValueError("WWZ decay must be positive")
+
+    base_weights = 1.0 / dy**2
+    rows = []
+    valid_centers = []
+    counts = []
+    best_periods = []
+    best_values = []
+    for center in centers:
+        values = np.full_like(frequency, np.nan, dtype=float)
+        effective_counts = np.zeros_like(frequency, dtype=float)
+        for idx, freq in enumerate(frequency):
+            omega = 2.0 * np.pi * freq
+            wavelet = np.exp(-decay * (omega * (t - center)) ** 2)
+            weights = base_weights * wavelet
+            weight_sum = float(np.sum(weights))
+            if weight_sum <= 0:
+                continue
+            norm_weights = weights / weight_sum
+            neff = 1.0 / float(np.sum(norm_weights**2))
+            effective_counts[idx] = neff
+            if neff < min_points:
+                continue
+            phase = omega * (t - center)
+            design = np.column_stack([np.ones_like(t), np.cos(phase), np.sin(phase)])
+            sqrt_weights = np.sqrt(weights)
+            weighted_design = design * sqrt_weights[:, None]
+            weighted_y = y * sqrt_weights
+            try:
+                coeffs, *_ = np.linalg.lstsq(weighted_design, weighted_y, rcond=None)
+            except np.linalg.LinAlgError:
+                continue
+            model = design @ coeffs
+            y_mean = float(np.sum(norm_weights * y))
+            total_var = float(np.sum(norm_weights * (y - y_mean) ** 2))
+            resid_var = float(np.sum(norm_weights * (y - model) ** 2))
+            model_var = max(total_var - resid_var, 0.0)
+            if resid_var <= 0:
+                values[idx] = np.nan
+            else:
+                values[idx] = max(neff - 3.0, 0.0) * model_var / (2.0 * resid_var)
+        if np.all(np.isnan(values)):
+            continue
+        rows.append(values)
+        valid_centers.append(float(center))
+        counts.append(float(np.nanmax(effective_counts)))
+        best_idx = int(np.nanargmax(values))
+        best_periods.append(float(period_axis[best_idx]))
+        best_values.append(float(values[best_idx]))
+
+    if not rows:
+        return empty_advanced_result(
+            "wwz",
+            "WWZ tomographic map",
+            "WWZ",
+            period_axis,
+            frequency,
+            window_width,
+            window_step,
+            min_points,
+            "No WWZ windows had enough effective points for the selected settings.",
+        )
+
+    return {
+        "method": "wwz",
+        "method_label": "WWZ tomographic map",
+        "metric": "WWZ",
+        "window_width": window_width,
+        "window_step": window_step,
+        "min_points": min_points,
+        "wwz_decay": decay,
+        "period": period_axis.tolist(),
+        "frequency": frequency.tolist(),
+        "time": valid_centers,
+        "values": np.vstack(rows).tolist(),
+        "counts": counts,
+        "best_period": best_periods,
+        "best_value": best_values,
+        "message": "",
+    }
+
+
+def advanced_time_frequency_map(result: dict, fields: dict[str, str]) -> dict:
+    method = fields.get("advanced_method", "v1")
+    if method == "v2":
+        return wwz_map(result, fields)
+    return sliding_lomb_scargle(result, fields)
 
 
 class Handler(BaseHTTPRequestHandler):

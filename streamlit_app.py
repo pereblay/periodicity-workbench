@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app import run_analysis, sliding_lomb_scargle, update_folded_profile
+from app import advanced_time_frequency_map, run_analysis, update_folded_profile
 
 
 st.set_page_config(
@@ -425,7 +425,7 @@ def advanced_tomographic_figure(advanced_result: dict) -> go.Figure:
             )
         )
     fig.update_layout(
-        title="Sliding Lomb-Scargle tomographic map",
+        title=advanced_result.get("method_label", "Advanced tomographic map"),
         xaxis_title="Period [d]",
         yaxis_title="Window center time",
         height=520,
@@ -533,14 +533,14 @@ def render_results(result: dict) -> None:
             download_dataframe_button(
                 "Download tomographic map",
                 advanced_map_dataframe(advanced_result),
-                "advanced_sliding_lomb_scargle_map.txt",
+                "advanced_tomographic_map.txt",
                 "download_advanced_map",
             )
         with adv_cols[1]:
             download_dataframe_button(
                 "Download best-period track",
                 advanced_best_dataframe(advanced_result),
-                "advanced_sliding_lomb_scargle_best_period.txt",
+                "advanced_best_period_track.txt",
                 "download_advanced_best",
             )
         st.dataframe(clean_dataframe(advanced_best_dataframe(advanced_result)), use_container_width=True, hide_index=True)
@@ -731,6 +731,7 @@ with st.sidebar:
         ["v1 Sliding LS tomographic map", "v2 WWZ map"],
         horizontal=False,
     )
+    advanced_method_key = "v2" if advanced_method == "v2 WWZ map" else "v1"
     previous_result = st.session_state.get("last_result")
     baseline_hint = float(previous_result["baseline"]) if previous_result else 100.0
     period_max_hint = 1.0 / fmin if fmin > 0 else baseline_hint / 3.0
@@ -757,9 +758,19 @@ with st.sidebar:
         format="%.3f",
     )
     advanced_min_points = st.number_input("Minimum points per window", min_value=3, value=30, step=5)
-    advanced_metric = st.selectbox("Color metric", ["power", "amplitude"])
-    if advanced_method == "v2 WWZ map":
-        st.info("WWZ will be added next; v1 Sliding LS is available now.")
+    if advanced_method_key == "v1":
+        advanced_metric = st.selectbox("Color metric", ["power", "amplitude"])
+        advanced_wwz_decay = 0.0125
+    else:
+        advanced_metric = "WWZ"
+        advanced_wwz_decay = st.number_input(
+            "WWZ decay",
+            min_value=0.0001,
+            value=0.0125,
+            step=0.0025,
+            format="%.5f",
+            help="Larger values make the time window narrower; smaller values make period tracks smoother in time.",
+        )
     run_advanced = st.button("Run advanced map", use_container_width=True)
 
 
@@ -793,6 +804,8 @@ def current_fields(bootstrap_value: int | None = None) -> dict[str, str]:
         "advanced_window_step": str(advanced_window_step),
         "advanced_min_points": str(advanced_min_points),
         "advanced_metric": str(advanced_metric),
+        "advanced_method": advanced_method_key,
+        "advanced_wwz_decay": str(advanced_wwz_decay),
     }
     if selected_period_values:
         fields["fold_fit_periods"] = ",".join(f"{period:.12g}" for period in selected_period_values)
@@ -894,13 +907,10 @@ if run_advanced:
     if "last_result" not in st.session_state:
         st.error("Run an analysis before running Advanced mode.")
         st.stop()
-    if advanced_method == "v2 WWZ map":
-        st.error("WWZ mode is not implemented yet. Select v1 Sliding LS tomographic map.")
-        st.stop()
     try:
         fields = current_fields(bootstrap_value=0)
-        with st.spinner("Running sliding Lomb-Scargle map..."):
-            st.session_state["advanced_result"] = sliding_lomb_scargle(st.session_state["last_result"], fields)
+        with st.spinner("Running advanced tomographic map..."):
+            st.session_state["advanced_result"] = advanced_time_frequency_map(st.session_state["last_result"], fields)
     except Exception as exc:
         st.error(str(exc))
         st.stop()
