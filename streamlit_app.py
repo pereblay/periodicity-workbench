@@ -437,7 +437,7 @@ def advanced_tomographic_figure(advanced_result: dict) -> go.Figure:
             hovertemplate="Period=%{x:.6g} d<br>Time=%{y:.6g}<br>" + metric + "=%{z:.6g}<extra></extra>",
         )
     )
-    if advanced_result.get("best_period"):
+    if advanced_result.get("show_best_track", True) and advanced_result.get("best_period"):
         fig.add_trace(
             go.Scatter(
                 x=advanced_result["best_period"],
@@ -792,6 +792,7 @@ with st.sidebar:
         format="%.3f",
     )
     advanced_min_points = st.number_input("Minimum points per window", min_value=3, value=30, step=5)
+    advanced_show_best_track = st.checkbox("Show best period track", value=True)
     if advanced_method_key == "v1":
         advanced_metric = st.selectbox("Color metric", ["power", "amplitude"])
         advanced_wwz_decay = 0.0125
@@ -840,6 +841,7 @@ def current_fields(bootstrap_value: int | None = None) -> dict[str, str]:
         "advanced_metric": str(advanced_metric),
         "advanced_method": advanced_method_key,
         "advanced_wwz_decay": str(advanced_wwz_decay),
+        "advanced_show_best_track": str(advanced_show_best_track),
     }
     if selected_period_values:
         fields["fold_fit_periods"] = ",".join(f"{period:.12g}" for period in selected_period_values)
@@ -944,7 +946,9 @@ if run_advanced:
     try:
         fields = current_fields(bootstrap_value=0)
         with st.spinner("Running advanced tomographic map..."):
-            st.session_state["advanced_result"] = advanced_time_frequency_map(st.session_state["last_result"], fields)
+            advanced_result = advanced_time_frequency_map(st.session_state["last_result"], fields)
+            advanced_result["show_best_track"] = advanced_show_best_track
+            st.session_state["advanced_result"] = advanced_result
     except Exception as exc:
         st.error(str(exc))
         st.stop()
