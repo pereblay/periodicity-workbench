@@ -601,21 +601,23 @@ def usable_candidate_peaks(peaks: list[PeakSummary]) -> list[PeakSummary]:
     ]
 
 
-def folded_fit_ratios(primary_period: float, fields: dict[str, str]) -> tuple[list[float], list[float]]:
+def folded_configuration(primary_period: float, fields: dict[str, str]) -> tuple[float, list[float], list[float]]:
     mode = fields.get("fold_fit_mode", "harmonics")
     if mode == "selected":
         periods = parse_period_list(fields.get("fold_fit_periods", ""))
         if not periods:
             periods = [primary_period]
-        ratios = [primary_period / period for period in periods]
-        return ratios, periods
+        folded_period = periods[0]
+        ratios = [folded_period / period for period in periods]
+        return folded_period, ratios, periods
 
     n_harmonics = int(fields.get("fold_fit_harmonics", "2"))
     if n_harmonics < 1:
         raise ValueError("Number of folded-fit harmonics must be at least 1")
+    folded_period = primary_period
     ratios = [float(k) for k in range(1, n_harmonics + 1)]
     periods = [primary_period / k for k in range(1, n_harmonics + 1)]
-    return ratios, periods
+    return folded_period, ratios, periods
 
 
 def fig_to_data_uri(fig) -> str:
@@ -790,13 +792,14 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         residual_power = np.zeros_like(power)
         residual_peaks = []
 
-    fit_ratios, fit_periods = folded_fit_ratios(primary.period, fields)
-    folded = folded_profile(t, y, dy, primary.period, t0, fold_bins, fit_ratios)
+    folded_period, fit_ratios, fit_periods = folded_configuration(primary.period, fields)
+    folded = folded_profile(t, y, dy, folded_period, t0, fold_bins, fit_ratios)
     period = 1.0 / freq
     return {
         "n_points": len(t),
         "baseline": float(t.max() - t.min()),
         "primary_period": primary.period,
+        "folded_period": folded_period,
         "t0": t0,
         "excluded_periods": excluded_periods,
         "exclusion_tolerance": exclusion_tolerance,
@@ -844,8 +847,8 @@ def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
     t0_raw = fields.get("t0", "").strip()
     t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
 
-    fit_ratios, fit_periods = folded_fit_ratios(primary_period, fields)
-    folded = folded_profile(t, y, dy, primary_period, t0, fold_bins, fit_ratios)
+    folded_period, fit_ratios, fit_periods = folded_configuration(primary_period, fields)
+    folded = folded_profile(t, y, dy, folded_period, t0, fold_bins, fit_ratios)
 
     updated = dict(result)
     updated_series = dict(series)
@@ -860,6 +863,7 @@ def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
     )
     updated["series"] = updated_series
     updated["t0"] = t0
+    updated["folded_period"] = folded_period
     updated["folded_maxima"] = [{"phase": ph, "flux": val} for ph, val in folded["maxima"]]
     updated["fold_fit_periods"] = fit_periods
     updated["fold_fit_ratios"] = fit_ratios

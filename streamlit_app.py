@@ -267,7 +267,7 @@ def render_results(result: dict) -> None:
     metric_cols[0].metric("Rows used", f"{result['n_points']}")
     metric_cols[1].metric("Baseline", f"{result['baseline']:.1f} d")
     metric_cols[2].metric("Primary period", f"{result['primary_period']:.4f} d")
-    metric_cols[3].metric("T0", f"{result['t0']:.4f}")
+    metric_cols[3].metric("Folded period", f"{result.get('folded_period', result['primary_period']):.4f} d")
 
     top_plot_cols = st.columns(3)
     with top_plot_cols[0]:
@@ -409,7 +409,7 @@ with st.sidebar:
         selected_period_values = unique_periods(selected_period_values)
         if selected_period_values:
             st.caption(
-                "Selected folded-fit periods: "
+                "Folding on the first selected period; fitted periods: "
                 + ", ".join(f"{period:.4f} d" for period in selected_period_values)
             )
         fold_fit_harmonics = 1
