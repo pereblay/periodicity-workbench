@@ -693,7 +693,6 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     prewhiten_periods = parse_period_list(fields.get("prewhiten_periods", ""))
     n_bootstrap = int(fields.get("n_bootstrap", "1000"))
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
-    include_harmonic = fields.get("include_harmonic", "off") == "on"
     fold_bins = int(fields.get("fold_bins", "10"))
     t, y, dy = read_columns(file_bytes, filename, time_col, flux_col, error_col)
     y_offset = weighted_median(y, 1.0 / dy**2)

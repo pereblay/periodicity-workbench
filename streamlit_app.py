@@ -363,7 +363,6 @@ with st.sidebar:
     st.subheader("Folded Profile")
     fold_bins = st.number_input("Phase bins", min_value=4, max_value=80, value=10, step=1)
     t0_text = st.text_input("T0 / MJD", value="", placeholder="first data point")
-    include_harmonic = st.checkbox("Include first harmonic in folded fit", value=False)
     fold_fit_mode = st.radio(
         "Folded-fit frequencies",
         ["Harmonics of primary", "Selected periods"],
@@ -374,7 +373,7 @@ with st.sidebar:
             "Number of harmonics in folded fit",
             min_value=1,
             max_value=8,
-            value=2 if include_harmonic else 1,
+            value=1,
             step=1,
         )
         selected_period_values: list[float] = []
@@ -524,8 +523,6 @@ def current_fields(bootstrap_value: int | None = None) -> dict[str, str]:
         fields["prewhiten_periods"] = ",".join(f"{period:.12g}" for period in prewhitening_periods_for_fields)
     if t0_text.strip():
         fields["t0"] = t0_text.strip()
-    if include_harmonic:
-        fields["include_harmonic"] = "on"
     return fields
 
 
