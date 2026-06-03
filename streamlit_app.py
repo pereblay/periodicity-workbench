@@ -265,6 +265,7 @@ def periodogram_figure(result: dict, key: str, title: str, peaks_key: str) -> go
 
 def window_figure(result: dict) -> go.Figure:
     series = result["series"]
+    window_peaks = result.get("window_peaks", [])
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -275,8 +276,19 @@ def window_figure(result: dict) -> go.Figure:
             hovertemplate="Period=%{x:.6f} d<br>Window power=%{y:.6g}<extra></extra>",
         )
     )
-    for peak in result.get("window_peaks", []):
-        fig.add_vline(x=peak["period"], line_dash="dash", line_color="#b13b32", opacity=0.35)
+    if window_peaks:
+        fig.add_trace(
+            go.Scatter(
+                x=[peak["period"] for peak in window_peaks],
+                y=[peak["power"] for peak in window_peaks],
+                mode="markers",
+                marker=dict(color="#b13b32", size=5),
+                hovertemplate="Peak period=%{x:.6f} d<br>Window power=%{y:.6g}<extra></extra>",
+                showlegend=False,
+            )
+        )
+    for peak in window_peaks[:50]:
+        fig.add_vline(x=peak["period"], line_dash="dash", line_color="#b13b32", opacity=0.2)
     fig.update_layout(
         title="Sampling window",
         xaxis_title="Period [d]",
