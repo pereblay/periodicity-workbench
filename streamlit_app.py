@@ -307,8 +307,11 @@ def render_results(result: dict) -> None:
             st.info("No prewhitening step has been applied yet.")
     with prewhitening_cols[1]:
         st.dataframe(pd.DataFrame(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
-        st.caption("Lomb-Scargle peak summary")
-        st.dataframe(lomb_scargle_summary_dataframe(result["peaks"]), use_container_width=True, hide_index=True)
+        st.caption("Residual Lomb-Scargle peak summary")
+        if result.get("has_prewhitening"):
+            st.dataframe(lomb_scargle_summary_dataframe(result["residual_peaks"]), use_container_width=True, hide_index=True)
+        else:
+            st.info("Residual peaks will appear after the first prewhitening step.")
 
     st.subheader("Folded-profile maxima")
     st.dataframe(pd.DataFrame(result["folded_maxima"]), use_container_width=True, hide_index=True)
