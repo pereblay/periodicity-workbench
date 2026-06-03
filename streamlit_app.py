@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -12,6 +14,29 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+ANALYSIS_STATE_KEYS = [
+    "last_result",
+    "last_file_bytes",
+    "last_filename",
+    "last_fields",
+    "last_live_signature",
+    "advanced_result",
+    "show_prewhitening_model",
+]
+
+
+def uploaded_file_signature(uploaded_file) -> tuple[str, int, str]:
+    file_bytes = uploaded_file.getvalue()
+    digest = hashlib.sha256(file_bytes).hexdigest()
+    return uploaded_file.name, len(file_bytes), digest
+
+
+def clear_analysis_state() -> None:
+    for key in ANALYSIS_STATE_KEYS:
+        st.session_state.pop(key, None)
+    st.session_state["prewhitening_periods"] = []
 
 
 def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
@@ -557,6 +582,15 @@ with st.sidebar:
         accept_multiple_files=False,
         help="Files without extension can be uploaded by choosing 'All files' in the file picker.",
     )
+    if uploaded is None:
+        if st.session_state.get("uploaded_file_signature") is not None:
+            clear_analysis_state()
+            st.session_state.pop("uploaded_file_signature", None)
+    else:
+        current_upload_signature = uploaded_file_signature(uploaded)
+        if current_upload_signature != st.session_state.get("uploaded_file_signature"):
+            clear_analysis_state()
+            st.session_state["uploaded_file_signature"] = current_upload_signature
 
     st.subheader("Columns")
     col_a, col_b, col_c = st.columns(3)
