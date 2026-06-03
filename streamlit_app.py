@@ -390,14 +390,14 @@ def folded_figure(result: dict) -> go.Figure:
     return apply_plot_frame(fig)
 
 
-def prewhitening_model_figure(result: dict) -> go.Figure:
+def prewhitening_model_figure(result: dict, show_errors: bool = True) -> go.Figure:
     series = result["series"]
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=series["time"],
             y=series["flux"],
-            error_y=dict(type="data", array=series["error"], visible=True),
+            error_y=dict(type="data", array=series["error"], visible=show_errors),
             mode="markers",
             marker=dict(color="#20242a", size=5),
             name="Original data",
@@ -537,7 +537,7 @@ def render_results(result: dict) -> None:
 
     if st.session_state.get("show_prewhitening_model"):
         if result.get("has_prewhitening"):
-            st.plotly_chart(prewhitening_model_figure(result), use_container_width=True)
+            st.plotly_chart(prewhitening_model_figure(result, show_model_errors), use_container_width=True)
             download_dataframe_button(
                 "Download plot data",
                 light_curve_model_dataframe(result),
@@ -757,6 +757,7 @@ with st.sidebar:
         use_container_width=True,
         help="Show the model fitted to the original light curve using all periods accumulated in the prewhitening table.",
     )
+    show_model_errors = st.checkbox("Show model plot errors", value=True)
     clear_prewhitening = st.button("Clear prewhitening chain", use_container_width=True)
 
     st.subheader("Advanced Mode")
