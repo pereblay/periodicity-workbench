@@ -601,16 +601,20 @@ def usable_candidate_peaks(peaks: list[PeakSummary]) -> list[PeakSummary]:
     ]
 
 
-def folded_configuration(primary_period: float, fields: dict[str, str]) -> tuple[float, list[float], list[float]]:
+def folded_configuration(primary_period: float | None, fields: dict[str, str]) -> tuple[float, list[float], list[float]]:
     mode = fields.get("fold_fit_mode", "harmonics")
     if mode == "selected":
         periods = parse_period_list(fields.get("fold_fit_periods", ""))
         if not periods:
+            if primary_period is None:
+                raise ValueError("Selected folded periods are required when no primary period was found")
             periods = [primary_period]
         folded_period = periods[0]
         ratios = [folded_period / period for period in periods]
         return folded_period, ratios, periods
 
+    if primary_period is None:
+        raise ValueError("No primary period is available for harmonic folded fitting")
     n_harmonics = int(fields.get("fold_fit_harmonics", "2"))
     if n_harmonics < 1:
         raise ValueError("Number of folded-fit harmonics must be at least 1")
@@ -699,17 +703,29 @@ def empty_analysis_result(
     win: np.ndarray,
     window_peaks: list[dict[str, float]],
     message: str,
+    fields: dict[str, str] | None = None,
+    t0: float | None = None,
 ) -> dict:
     period = 1.0 / freq
     residual_power = np.zeros_like(power)
     folded = empty_folded_payload()
+    folded_period = None
+    fit_periods: list[float] = []
+    fit_ratios: list[float] = []
+    if fields is not None:
+        try:
+            fold_bins = int(fields.get("fold_bins", "10"))
+            folded_period, fit_ratios, fit_periods = folded_configuration(None, fields)
+            folded = folded_profile(t, y, dy, folded_period, float(t0 if t0 is not None else t[0]), fold_bins, fit_ratios)
+        except ValueError:
+            folded = empty_folded_payload()
     return {
         "analysis_message": message,
         "n_points": len(t),
         "baseline": float(t.max() - t.min()),
         "primary_period": None,
-        "folded_period": None,
-        "t0": float(t[0]),
+        "folded_period": folded_period,
+        "t0": float(t0 if t0 is not None else t[0]),
         "excluded_periods": [],
         "exclusion_tolerance": None,
         "has_prewhitening": False,
@@ -718,9 +734,9 @@ def empty_analysis_result(
         "window_peaks": window_peaks,
         "peaks": [],
         "residual_peaks": [],
-        "folded_maxima": [],
-        "fold_fit_periods": [],
-        "fold_fit_ratios": [],
+        "folded_maxima": [{"phase": ph, "flux": val} for ph, val in folded["maxima"]],
+        "fold_fit_periods": fit_periods,
+        "fold_fit_ratios": fit_ratios,
         "series": {
             "period": period.tolist(),
             "frequency": freq.tolist(),
@@ -731,11 +747,11 @@ def empty_analysis_result(
             "flux": y.tolist(),
             "error": dy.tolist(),
             "prewhitening_model_flux": y.tolist(),
-            "fold_phase": [],
-            "fold_flux": [],
-            "fold_error": [],
-            "fold_model_phase": [],
-            "fold_model_flux": [],
+            "fold_phase": folded["phase"].tolist(),
+            "fold_flux": folded["flux"].tolist(),
+            "fold_error": folded["error"].tolist(),
+            "fold_model_phase": folded["model_phase"].tolist(),
+            "fold_model_flux": folded["model_flux"].tolist(),
         },
         "plots": {
             "periodogram": make_periodogram_plot(freq, power, [], "Lomb-Scargle periodogram"),
@@ -819,6 +835,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             "No usable candidate peak remains after sampling-window/manual filtering. "
             "Try lowering the frequency range, increasing the sampling-window artefact threshold, "
             "or removing some manual exclusions.",
+            fields=fields,
+            t0=t0,
         )
     primary = candidate_peaks[0]
     prewhiten_base_periods = prewhiten_periods
@@ -912,9 +930,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
 
 
 def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
-    if result.get("primary_period") is None:
-        raise ValueError("No folded profile can be updated because no candidate period was found.")
-    primary_period = float(result["primary_period"])
+    primary_period = None if result.get("primary_period") is None else float(result["primary_period"])
     fold_bins = int(fields.get("fold_bins", "10"))
     series = result["series"]
     t = np.asarray(series["time"], dtype=float)
