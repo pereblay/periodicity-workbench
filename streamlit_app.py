@@ -30,7 +30,7 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
                 "window_period_d": peak["window_period"],
             }
         )
-    return pd.DataFrame(rows)
+    return clean_dataframe(pd.DataFrame(rows))
 
 
 def lomb_scargle_summary_dataframe(peaks: list[dict]) -> pd.DataFrame:
@@ -45,7 +45,11 @@ def lomb_scargle_summary_dataframe(peaks: list[dict]) -> pd.DataFrame:
                 "FAP": f"{float(peak['fap']):.5f}",
             }
         )
-    return pd.DataFrame(rows)
+    return clean_dataframe(pd.DataFrame(rows))
+
+
+def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    return df.where(pd.notna(df), "")
 
 
 def window_peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
@@ -306,7 +310,7 @@ def render_results(result: dict) -> None:
         else:
             st.info("No prewhitening step has been applied yet.")
     with prewhitening_cols[1]:
-        st.dataframe(pd.DataFrame(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
+        st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), use_container_width=True, hide_index=True)
         st.caption("Residual Lomb-Scargle peak summary")
         if result.get("has_prewhitening"):
             st.dataframe(lomb_scargle_summary_dataframe(result["residual_peaks"]), use_container_width=True, hide_index=True)
@@ -379,6 +383,11 @@ with st.sidebar:
     st.subheader("Uncertainty")
     n_bootstrap = st.number_input("Bootstrap iterations", min_value=0, value=1000, step=50)
     bootstrap_width = st.number_input("Bootstrap local width", min_value=0.001, value=0.03, step=0.001, format="%.3f")
+    update_uncertainties = st.button(
+        "Update uncertainties",
+        use_container_width=True,
+        help="Recompute bootstrap errors with the current settings and refresh all tables.",
+    )
 
     st.subheader("Folded Profile")
     fold_bins = st.number_input("Phase bins", min_value=4, max_value=80, value=10, step=1)
@@ -573,6 +582,22 @@ if update_folded:
     st.rerun()
 
 
+if update_uncertainties:
+    if n_bootstrap <= 1:
+        st.error("Set Bootstrap iterations above 1 before updating uncertainties.")
+        st.stop()
+    try:
+        fields = current_fields()
+        result = run_with_last_file(fields, "Updating bootstrap uncertainties...")
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
+    st.session_state["last_result"] = result
+    st.session_state["last_fields"] = fields
+    st.session_state["last_live_signature"] = current_live_signature()
+    st.rerun()
+
+
 if clear_prewhitening:
     st.session_state["prewhitening_periods"] = []
     if "last_file_bytes" in st.session_state:
@@ -622,6 +647,7 @@ if (
     and not clear_prewhitening
     and not show_model
     and not update_folded
+    and not update_uncertainties
 ):
     live_signature = current_live_signature()
     previous_signature = st.session_state.get("last_live_signature")
