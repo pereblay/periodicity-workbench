@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app import run_analysis
+from app import run_analysis, update_folded_profile
 
 
 st.set_page_config(
@@ -414,6 +414,11 @@ with st.sidebar:
                 + ", ".join(f"{period:.4f} d" for period in selected_period_values)
             )
         fold_fit_harmonics = 1
+    update_folded = st.button(
+        "Update folded profile",
+        use_container_width=True,
+        help="Refresh only the folded profile using the last completed analysis.",
+    )
 
     st.subheader("Manual Exclusions")
     exclusion_options = exclusion_options_from_result(st.session_state.get("last_result"))
@@ -537,6 +542,20 @@ def run_with_last_file(fields: dict[str, str], spinner_text: str) -> dict:
         return run_analysis(fields, file_bytes, filename)
 
 
+if update_folded:
+    if "last_result" not in st.session_state:
+        st.error("Run an analysis before updating the folded profile.")
+        st.stop()
+    try:
+        fields = current_fields(bootstrap_value=0)
+        st.session_state["last_result"] = update_folded_profile(st.session_state["last_result"], fields)
+        st.session_state["last_fields"] = fields
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
+    st.rerun()
+
+
 if clear_prewhitening:
     st.session_state["prewhitening_periods"] = []
     if "last_file_bytes" in st.session_state:
@@ -585,6 +604,7 @@ if (
     and not next_prewhitening
     and not clear_prewhitening
     and not show_model
+    and not update_folded
 ):
     live_signature = current_live_signature()
     previous_signature = st.session_state.get("last_live_signature")

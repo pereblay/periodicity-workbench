@@ -835,6 +835,42 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     }
 
 
+def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
+    primary_period = float(result["primary_period"])
+    fold_bins = int(fields.get("fold_bins", "10"))
+    series = result["series"]
+    t = np.asarray(series["time"], dtype=float)
+    y = np.asarray(series["flux"], dtype=float)
+    dy = np.asarray(series["error"], dtype=float)
+    t0_raw = fields.get("t0", "").strip()
+    t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
+
+    fit_ratios, fit_periods = folded_fit_ratios(primary_period, fields)
+    folded = folded_profile(t, y, dy, primary_period, t0, fold_bins, fit_ratios)
+
+    updated = dict(result)
+    updated_series = dict(series)
+    updated_series.update(
+        {
+            "fold_phase": folded["phase"].tolist(),
+            "fold_flux": folded["flux"].tolist(),
+            "fold_error": folded["error"].tolist(),
+            "fold_model_phase": folded["model_phase"].tolist(),
+            "fold_model_flux": folded["model_flux"].tolist(),
+        }
+    )
+    updated["series"] = updated_series
+    updated["t0"] = t0
+    updated["folded_maxima"] = [{"phase": ph, "flux": val} for ph, val in folded["maxima"]]
+    updated["fold_fit_periods"] = fit_periods
+    updated["fold_fit_ratios"] = fit_ratios
+    if "plots" in updated:
+        updated_plots = dict(updated["plots"])
+        updated_plots["folded"] = make_folded_plot(folded)
+        updated["plots"] = updated_plots
+    return updated
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, content_type: str, body: bytes) -> None:
         self.send_response(status)
