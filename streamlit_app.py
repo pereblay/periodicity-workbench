@@ -225,6 +225,19 @@ def add_peak_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") ->
         )
 
 
+def apply_plot_frame(fig: go.Figure) -> go.Figure:
+    axis_style = dict(
+        showline=True,
+        linewidth=1,
+        linecolor="#20242a",
+        mirror=True,
+        ticks="outside",
+    )
+    fig.update_xaxes(**axis_style)
+    fig.update_yaxes(**axis_style)
+    return fig
+
+
 def periodogram_figure(result: dict, key: str, title: str, peaks_key: str) -> go.Figure:
     series = result["series"]
     fig = go.Figure()
@@ -247,7 +260,7 @@ def periodogram_figure(result: dict, key: str, title: str, peaks_key: str) -> go
         margin=dict(l=20, r=20, t=50, b=20),
         showlegend=False,
     )
-    return fig
+    return apply_plot_frame(fig)
 
 
 def window_figure(result: dict) -> go.Figure:
@@ -272,7 +285,7 @@ def window_figure(result: dict) -> go.Figure:
         margin=dict(l=20, r=20, t=50, b=20),
         showlegend=False,
     )
-    return fig
+    return apply_plot_frame(fig)
 
 
 def folded_figure(result: dict) -> go.Figure:
@@ -314,7 +327,7 @@ def folded_figure(result: dict) -> go.Figure:
         showlegend=False,
     )
     fig.update_xaxes(range=[0, 2])
-    return fig
+    return apply_plot_frame(fig)
 
 
 def prewhitening_model_figure(result: dict) -> go.Figure:
@@ -348,7 +361,7 @@ def prewhitening_model_figure(result: dict) -> go.Figure:
         height=430,
         margin=dict(l=20, r=20, t=50, b=20),
     )
-    return fig
+    return apply_plot_frame(fig)
 
 
 def render_results(result: dict) -> None:
