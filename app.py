@@ -746,47 +746,50 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             "or removing some manual exclusions."
         )
     primary = candidate_peaks[0]
-    if prewhiten_periods:
-        prewhiten_base_periods = prewhiten_periods
+    prewhiten_base_periods = prewhiten_periods
+    prewhiten_terms = prewhitening_terms_from_periods(prewhiten_base_periods, peaks) if prewhiten_base_periods else []
+    if prewhiten_terms:
+        prewhiten_model, prewhitening_table = fit_sinusoids_with_terms(t, y_analysis, dy, prewhiten_terms)
+        residuals = y_analysis - prewhiten_model
+        residual_power, residual_ls, residual_peaks = find_lomb_scargle_peaks(
+            t, residuals, dy, freq, max_peaks, min_considered_period=min_considered_period
+        )
+        classify_peaks(
+            residual_peaks,
+            freq,
+            win,
+            float(t.max() - t.min()),
+            window_power_threshold=window_artifact_power,
+            relative_tolerance=window_artifact_tolerance,
+        )
+        apply_manual_exclusions(residual_peaks, excluded_periods, exclusion_tolerance)
+        residual_candidate_peaks = usable_candidate_peaks(residual_peaks)
+        residual_primary = residual_candidate_peaks[0] if residual_candidate_peaks else None
+        add_harmonic_and_window_peaks(
+            residual_peaks,
+            freq,
+            residual_power,
+            residual_ls,
+            win,
+            residual_primary,
+            min_considered_period,
+            window_power_threshold=window_artifact_power,
+        )
+        classify_peaks(
+            residual_peaks,
+            freq,
+            win,
+            float(t.max() - t.min()),
+            window_power_threshold=window_artifact_power,
+            relative_tolerance=window_artifact_tolerance,
+        )
+        apply_manual_exclusions(residual_peaks, excluded_periods, exclusion_tolerance)
+        residual_peaks.sort(key=lambda peak: peak.power, reverse=True)
     else:
-        prewhiten_base_periods = [primary.period]
-    prewhiten_terms = prewhitening_terms_from_periods(prewhiten_base_periods, peaks)
-    prewhiten_model, prewhitening_table = fit_sinusoids_with_terms(t, y_analysis, dy, prewhiten_terms)
-    residuals = y_analysis - prewhiten_model
-    residual_power, residual_ls, residual_peaks = find_lomb_scargle_peaks(
-        t, residuals, dy, freq, max_peaks, min_considered_period=min_considered_period
-    )
-    classify_peaks(
-        residual_peaks,
-        freq,
-        win,
-        float(t.max() - t.min()),
-        window_power_threshold=window_artifact_power,
-        relative_tolerance=window_artifact_tolerance,
-    )
-    apply_manual_exclusions(residual_peaks, excluded_periods, exclusion_tolerance)
-    residual_candidate_peaks = usable_candidate_peaks(residual_peaks)
-    residual_primary = residual_candidate_peaks[0] if residual_candidate_peaks else None
-    add_harmonic_and_window_peaks(
-        residual_peaks,
-        freq,
-        residual_power,
-        residual_ls,
-        win,
-        residual_primary,
-        min_considered_period,
-        window_power_threshold=window_artifact_power,
-    )
-    classify_peaks(
-        residual_peaks,
-        freq,
-        win,
-        float(t.max() - t.min()),
-        window_power_threshold=window_artifact_power,
-        relative_tolerance=window_artifact_tolerance,
-    )
-    apply_manual_exclusions(residual_peaks, excluded_periods, exclusion_tolerance)
-    residual_peaks.sort(key=lambda peak: peak.power, reverse=True)
+        prewhiten_model = np.zeros_like(y_analysis)
+        prewhitening_table = []
+        residual_power = np.zeros_like(power)
+        residual_peaks = []
 
     fit_ratios, fit_periods = folded_fit_ratios(primary.period, fields)
     folded = folded_profile(t, y, dy, primary.period, t0, fold_bins, fit_ratios)
@@ -798,6 +801,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "t0": t0,
         "excluded_periods": excluded_periods,
         "exclusion_tolerance": exclusion_tolerance,
+        "has_prewhitening": bool(prewhitening_table),
         "prewhiten_periods": prewhiten_base_periods,
         "prewhitening_terms": prewhitening_table,
         "window_peaks": window_peaks,

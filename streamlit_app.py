@@ -269,27 +269,29 @@ def render_results(result: dict) -> None:
     metric_cols[2].metric("Primary period", f"{result['primary_period']:.4f} d")
     metric_cols[3].metric("T0", f"{result['t0']:.4f}")
 
-    plot_cols = st.columns(2)
-    with plot_cols[0]:
+    top_plot_cols = st.columns(3)
+    with top_plot_cols[0]:
         st.plotly_chart(periodogram_figure(result, "power", "Lomb-Scargle periodogram", "peaks"), use_container_width=True)
-    with plot_cols[1]:
+    with top_plot_cols[1]:
         st.plotly_chart(window_figure(result), use_container_width=True)
-    with plot_cols[0]:
-        st.plotly_chart(periodogram_figure(result, "residual_power", "After prewhitening", "residual_peaks"), use_container_width=True)
-    with plot_cols[1]:
+    with top_plot_cols[2]:
         st.plotly_chart(folded_figure(result), use_container_width=True)
-
-    if st.session_state.get("show_prewhitening_model"):
-        st.plotly_chart(prewhitening_model_figure(result), use_container_width=True)
 
     st.subheader("Detected peaks")
     st.dataframe(peaks_dataframe(result["peaks"]), use_container_width=True, hide_index=True)
 
-    st.subheader("After prewhitening")
-    st.dataframe(peaks_dataframe(result["residual_peaks"]), use_container_width=True, hide_index=True)
-
-    st.subheader("Prewhitening terms")
-    st.dataframe(pd.DataFrame(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
+    st.subheader("Prewhitening")
+    prewhitening_cols = st.columns([1.3, 1.0])
+    with prewhitening_cols[0]:
+        if result.get("has_prewhitening"):
+            st.plotly_chart(
+                periodogram_figure(result, "residual_power", "After prewhitening", "residual_peaks"),
+                use_container_width=True,
+            )
+        else:
+            st.info("No prewhitening step has been applied yet.")
+    with prewhitening_cols[1]:
+        st.dataframe(pd.DataFrame(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
 
     st.subheader("Folded-profile maxima")
     st.dataframe(pd.DataFrame(result["folded_maxima"]), use_container_width=True, hide_index=True)
@@ -305,6 +307,12 @@ def render_results(result: dict) -> None:
         use_container_width=True,
         hide_index=True,
     )
+
+    if st.session_state.get("show_prewhitening_model"):
+        if result.get("has_prewhitening"):
+            st.plotly_chart(prewhitening_model_figure(result), use_container_width=True)
+        else:
+            st.info("Add at least one prewhitening step before showing the model.")
 
 
 st.title("Periodicity Workbench")
