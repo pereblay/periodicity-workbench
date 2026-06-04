@@ -596,8 +596,8 @@ with st.sidebar:
     col_a, col_b, col_c = st.columns(3)
     time_col = col_a.number_input("Time", min_value=1, value=1, step=1)
     flux_col = col_b.number_input("Flux", min_value=1, value=2, step=1)
-    use_error_col = col_c.checkbox("Use error", value=True)
-    error_col = col_c.number_input("Error", min_value=1, value=3, step=1, disabled=not use_error_col)
+    error_col = col_c.number_input("Error", min_value=1, value=3, step=1)
+    use_error_col = st.checkbox("Use error column", value=True)
 
     run = st.button("Run analysis", type="primary", use_container_width=True)
 
