@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from app import advanced_time_frequency_map, run_analysis, update_folded_profile
+from app import advanced_time_frequency_map, run_analysis, update_folded_profile, validate_upload
 
 
 st.set_page_config(
@@ -97,6 +97,23 @@ def suggested_frequency_range_from_bytes(file_bytes: bytes | None, time_column: 
 
 def suggested_frequency_range(uploaded_file, time_column: int) -> tuple[float, float, str] | None:
     return suggested_frequency_range_from_bytes(None if uploaded_file is None else uploaded_file.getvalue(), time_column)
+
+
+def file_preview_dataframe(file_bytes: bytes, filename: str, max_rows: int = 12) -> pd.DataFrame:
+    text = validate_upload(filename, file_bytes)
+    rows = [
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", "%"))
+    ][:max_rows]
+    if not rows:
+        return pd.DataFrame()
+    data = np.genfromtxt(io.StringIO("\n".join(rows).replace(",", " ")), invalid_raise=False)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    if data.ndim != 2:
+        return pd.DataFrame()
+    return pd.DataFrame(data, columns=[f"Column {index}" for index in range(1, data.shape[1] + 1)])
 
 
 def suggested_frequency_range_from_time(time_values: list[float] | np.ndarray) -> tuple[float, float, str] | None:
@@ -490,6 +507,14 @@ def input_controls(prefix: str, location=st) -> None:
                 st.session_state[f"{prefix}_frequency_suggestion"] = suggestion
         st.session_state["app_file_bytes"] = uploaded.getvalue()
         st.session_state["app_filename"] = uploaded.name
+        try:
+            preview = file_preview_dataframe(st.session_state["app_file_bytes"], st.session_state["app_filename"])
+        except ValueError as exc:
+            location.error(str(exc))
+            preview = pd.DataFrame()
+        if not preview.empty:
+            location.caption("File preview")
+            location.dataframe(preview, use_container_width=True, hide_index=True)
     cols = location.columns(3)
     cols[0].number_input("Time", min_value=1, value=st.session_state.get(f"{prefix}_time_col", 1), key=f"{prefix}_time_col")
     cols[1].number_input("Flux", min_value=1, value=st.session_state.get(f"{prefix}_flux_col", 2), key=f"{prefix}_flux_col")
