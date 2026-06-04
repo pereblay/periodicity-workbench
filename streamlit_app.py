@@ -617,18 +617,6 @@ def input_controls(prefix: str, location=st) -> None:
     limit_cols[1].text_input("xmax", value=st.session_state.get(f"{prefix}_xmax", ""), key=f"{prefix}_xmax", placeholder="auto")
     limit_cols[2].text_input("ymin", value=st.session_state.get(f"{prefix}_ymin", ""), key=f"{prefix}_ymin", placeholder="auto")
     limit_cols[3].text_input("ymax", value=st.session_state.get(f"{prefix}_ymax", ""), key=f"{prefix}_ymax", placeholder="auto")
-    if "app_file_bytes" in st.session_state:
-        try:
-            preview = file_preview_dataframe(st.session_state["app_file_bytes"], st.session_state["app_filename"])
-            if not preview.empty:
-                location.caption("File preview")
-                location.dataframe(preview, use_container_width=True, hide_index=True)
-            location.plotly_chart(
-                raw_preview_figure(st.session_state["app_file_bytes"], st.session_state["app_filename"], prefix),
-                use_container_width=True,
-            )
-        except ValueError as exc:
-            location.error(str(exc))
     action_cols = location.columns(2)
     if action_cols[0].button("Run analysis", type="primary", use_container_width=True, key=f"{prefix}_run"):
         fields = fields_from_state(prefix)
@@ -900,6 +888,26 @@ def render_search_outputs(result: dict | None) -> None:
         dataframe_download("Download folded data", pd.DataFrame({"phase": result["series"]["fold_phase"], "flux": result["series"]["fold_flux"], "error": result["series"]["fold_error"]}), "folded_profile.txt", "app_download_folded")
 
 
+def render_file_preview(prefix: str) -> None:
+    if "app_file_bytes" not in st.session_state:
+        return
+    st.subheader("Uploaded data preview")
+    preview_cols = st.columns([1, 2])
+    try:
+        preview = file_preview_dataframe(st.session_state["app_file_bytes"], st.session_state["app_filename"])
+        if not preview.empty:
+            with preview_cols[0]:
+                st.caption("File preview")
+                st.dataframe(preview, use_container_width=True, hide_index=True, height=300)
+        with preview_cols[1]:
+            st.plotly_chart(
+                raw_preview_figure(st.session_state["app_file_bytes"], st.session_state["app_filename"], prefix),
+                use_container_width=True,
+            )
+    except ValueError as exc:
+        st.error(str(exc))
+
+
 def render_secondary_outputs(result: dict | None) -> None:
     if not result:
         return
@@ -940,6 +948,7 @@ def layout_one() -> None:
         with st.expander("Advanced Mode", expanded=False):
             advanced_controls(prefix, st)
     result = st.session_state.get("app_result")
+    render_file_preview(prefix)
     render_search_outputs(result)
     render_secondary_outputs(result)
 
