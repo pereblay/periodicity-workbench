@@ -18,6 +18,18 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] > div:first-child {
+        height: 100vh;
+        overflow-y: auto;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 STATE_KEYS = [
     "app_result",
