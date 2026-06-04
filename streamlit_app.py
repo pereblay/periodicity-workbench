@@ -21,9 +21,17 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    [data-testid="stSidebar"] > div:first-child {
-        height: 100vh;
-        overflow-y: auto;
+    [data-testid="stSidebar"] {
+        height: 100vh !important;
+        overflow: hidden !important;
+    }
+    [data-testid="stSidebar"] > div:first-child,
+    [data-testid="stSidebarContent"] {
+        height: 100vh !important;
+        max-height: 100vh !important;
+        overflow-y: auto !important;
+        overscroll-behavior: contain;
+        padding-bottom: 3rem;
     }
     </style>
     """,
