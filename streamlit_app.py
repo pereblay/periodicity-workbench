@@ -279,6 +279,20 @@ def add_peak_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") ->
         )
 
 
+def padded_positive_y_range(values: list[float | None]) -> list[float] | None:
+    finite_values = []
+    for value in values:
+        if value is None or pd.isna(value):
+            continue
+        finite_values.append(float(value))
+    if not finite_values:
+        return None
+    ymax = max(finite_values)
+    if ymax <= 0:
+        return None
+    return [0.0, ymax * 1.25]
+
+
 def apply_plot_frame(fig: go.Figure) -> go.Figure:
     axis_style = dict(
         showline=True,
@@ -306,6 +320,9 @@ def periodogram_figure(result: dict, key: str, title: str, peaks_key: str) -> go
         )
     )
     add_peak_markers(fig, result[peaks_key])
+    peak_range = padded_positive_y_range([peak.get("power") for peak in result.get(peaks_key, [])])
+    if peak_range is None:
+        peak_range = padded_positive_y_range(series[key])
     fig.update_layout(
         title=title,
         xaxis_title="Period [d]",
@@ -314,6 +331,8 @@ def periodogram_figure(result: dict, key: str, title: str, peaks_key: str) -> go
         margin=dict(l=20, r=20, t=50, b=20),
         showlegend=False,
     )
+    if peak_range is not None:
+        fig.update_yaxes(range=peak_range)
     return apply_plot_frame(fig)
 
 
@@ -343,6 +362,9 @@ def window_figure(result: dict) -> go.Figure:
         )
     for peak in window_peaks[:50]:
         fig.add_vline(x=peak["period"], line_dash="dash", line_color="#b13b32", opacity=0.2)
+    peak_range = padded_positive_y_range([peak["power"] for peak in window_peaks])
+    if peak_range is None:
+        peak_range = padded_positive_y_range(series["window_power"])
     fig.update_layout(
         title="Sampling window",
         xaxis_title="Period [d]",
@@ -351,6 +373,8 @@ def window_figure(result: dict) -> go.Figure:
         margin=dict(l=20, r=20, t=50, b=20),
         showlegend=False,
     )
+    if peak_range is not None:
+        fig.update_yaxes(range=peak_range)
     return apply_plot_frame(fig)
 
 
