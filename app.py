@@ -785,13 +785,13 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     freq = frequency_grid(t, fmin, fmax, samples_per_peak)
     power, ls, peaks = find_lomb_scargle_peaks(t, y_analysis, dy, freq, max_peaks, min_considered_period=min_considered_period)
     win = spectral_window(t, freq)
-    window_peaks = sampling_window_peaks(freq, win, window_artifact_power, min_considered_period)
+    window_peaks = sampling_window_peaks(freq, win, window_artifact_power, 0.0)
     classify_peaks(
         peaks,
         freq,
         win,
         float(t.max() - t.min()),
-        min_window_period=min_considered_period,
+        min_window_period=0.0,
         window_power_threshold=window_artifact_power,
         relative_tolerance=window_artifact_tolerance,
     )
@@ -813,7 +813,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         freq,
         win,
         float(t.max() - t.min()),
-        min_window_period=min_considered_period,
+        min_window_period=0.0,
         window_power_threshold=window_artifact_power,
         relative_tolerance=window_artifact_tolerance,
     )
@@ -851,7 +851,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             freq,
             win,
             float(t.max() - t.min()),
-            min_window_period=min_considered_period,
+            min_window_period=0.0,
             window_power_threshold=window_artifact_power,
             relative_tolerance=window_artifact_tolerance,
         )
@@ -873,7 +873,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             freq,
             win,
             float(t.max() - t.min()),
-            min_window_period=min_considered_period,
+            min_window_period=0.0,
             window_power_threshold=window_artifact_power,
             relative_tolerance=window_artifact_tolerance,
         )
