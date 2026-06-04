@@ -180,7 +180,7 @@ def window_peak_indices(
         indices = np.unique(np.concatenate([indices, np.asarray(endpoint_indices, dtype=int)]))
     if len(indices) == 0:
         return indices
-    return indices[window_power[indices] >= threshold]
+    return indices[window_power[indices] > threshold]
 
 
 def sampling_window_peaks(
@@ -213,25 +213,15 @@ def classify_peaks(
     min_window_period: float = 0.0,
     window_power_threshold: float = 0.01,
     relative_tolerance: float = 0.01,
-    short_period_limit: float = 2.0,
-    short_period_window_threshold: float = 0.002,
-    short_period_relative_tolerance: float = 0.06,
 ) -> None:
-    minimum_threshold = min(window_power_threshold, short_period_window_threshold)
-    ranked = window_peak_indices(window_power, minimum_threshold)
+    ranked = window_peak_indices(window_power, window_power_threshold)
     if len(ranked) == 0:
         return
     resolution = 1.0 / baseline
     grid_tolerance = max(2.0 * np.median(np.diff(frequency)), resolution)
     for peak in peaks:
-        peak_window_threshold = window_power_threshold
-        peak_relative_tolerance = relative_tolerance
-        if peak.period <= short_period_limit:
-            peak_window_threshold = min(window_power_threshold, short_period_window_threshold)
-            peak_relative_tolerance = max(relative_tolerance, short_period_relative_tolerance)
-
         eligible = ranked[
-            (window_power[ranked] >= peak_window_threshold)
+            (window_power[ranked] > window_power_threshold)
             & ((1.0 / frequency[ranked]) >= min_window_period)
         ]
         if len(eligible) == 0:
@@ -240,9 +230,9 @@ def classify_peaks(
         nearest = int(eligible[int(np.argmin(distances))])
         freq_delta = abs(frequency[nearest] - peak.frequency)
         period_delta = abs((1.0 / frequency[nearest]) - peak.period)
-        freq_tolerance = max(grid_tolerance, peak_relative_tolerance * peak.frequency)
+        freq_tolerance = max(grid_tolerance, relative_tolerance * peak.frequency)
         period_grid_tolerance = grid_tolerance / max(peak.frequency**2, 1e-12)
-        period_tolerance = max(2.0 * period_grid_tolerance, peak_relative_tolerance * peak.period)
+        period_tolerance = max(2.0 * period_grid_tolerance, relative_tolerance * peak.period)
         if freq_delta <= freq_tolerance and period_delta <= period_tolerance:
             peak.kind = "sampling-window artefact"
             peak.window_frequency = float(frequency[nearest])

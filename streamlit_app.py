@@ -623,7 +623,7 @@ with st.sidebar:
         value=0.01,
         step=0.005,
         format="%.4f",
-        help="Lomb-Scargle peaks close to sampling-window peaks stronger than this are excluded from primary-period selection.",
+        help="Lomb-Scargle peaks close to sampling-window peaks stronger than this are excluded from primary-period selection. Use 1.0 to disable automatic sampling-window exclusions.",
     )
     window_artifact_tolerance = st.number_input(
         "Sampling-window match tolerance",
