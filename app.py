@@ -477,8 +477,8 @@ def prewhitening_terms_from_periods(
         terms.append(
             {
                 "label": f"step {idx}",
-                "frequency": main_peak.frequency if main_peak is not None else 1.0 / period,
-                "main_period": main_peak.period if main_peak is not None else period,
+                "frequency": 1.0 / period,
+                "main_period": period,
                 "main_period_error": None if main_peak is None else main_peak.period_error,
                 "period_error": None if main_peak is None else main_peak.period_error,
                 "frequency_error": None if main_peak is None else main_peak.frequency_error,
@@ -489,7 +489,7 @@ def prewhitening_terms_from_periods(
                 {
                     "label": f"step {idx} detected P/{order} harmonic",
                     "frequency": harmonic.frequency,
-                    "main_period": main_peak.period if main_peak is not None else period,
+                    "main_period": period,
                     "main_period_error": None if main_peak is None else main_peak.period_error,
                     "period_error": harmonic.period_error,
                     "frequency_error": harmonic.frequency_error,
@@ -701,6 +701,7 @@ def empty_analysis_result(
     message: str,
     fields: dict[str, str] | None = None,
     t0: float | None = None,
+    has_error_column: bool = True,
 ) -> dict:
     period = 1.0 / freq
     residual_power = np.zeros_like(power)
@@ -722,6 +723,7 @@ def empty_analysis_result(
         "primary_period": None,
         "folded_period": folded_period,
         "t0": float(t0 if t0 is not None else t[0]),
+        "has_error_column": has_error_column,
         "excluded_periods": [],
         "exclusion_tolerance": None,
         "has_prewhitening": False,
@@ -777,6 +779,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
     fold_bins = int(fields.get("fold_bins", "10"))
     t, y, dy = read_columns(file_bytes, filename, time_col, flux_col, error_col)
+    has_error_column = error_col is not None
     y_offset = weighted_median(y, 1.0 / dy**2)
     y_analysis = y - y_offset
     t0_raw = fields.get("t0", "").strip()
@@ -836,6 +839,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             "or removing some manual exclusions.",
             fields=fields,
             t0=t0,
+            has_error_column=has_error_column,
         )
     primary = candidate_peaks[0]
     prewhiten_base_periods = prewhiten_periods
@@ -894,6 +898,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "primary_period": primary.period,
         "folded_period": folded_period,
         "t0": t0,
+        "has_error_column": has_error_column,
         "excluded_periods": excluded_periods,
         "exclusion_tolerance": exclusion_tolerance,
         "has_prewhitening": bool(prewhitening_table),
