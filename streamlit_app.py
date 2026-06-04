@@ -514,6 +514,14 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
 def advanced_plot(advanced: dict) -> go.Figure:
     metric = advanced.get("metric", "power")
     fig = go.Figure(go.Heatmap(x=advanced.get("period", []), y=advanced.get("time", []), z=advanced.get("values", []), colorscale="Viridis", colorbar=dict(title=metric)))
+    if advanced.get("track_min_period") is not None and advanced.get("track_max_period") is not None:
+        fig.add_vrect(
+            x0=advanced["track_min_period"],
+            x1=advanced["track_max_period"],
+            fillcolor="white",
+            opacity=0.14,
+            line_width=0,
+        )
     if advanced.get("show_best_track", True) and advanced.get("best_period"):
         fig.add_trace(go.Scatter(x=advanced["best_period"], y=advanced["time"], mode="lines+markers", line=dict(color="white", width=2), marker=dict(color="white", size=4), showlegend=False))
     fig.update_layout(title=advanced.get("method_label", "Advanced map"), xaxis_title=advanced.get("period_label", "Period [d]"), yaxis_title="Window center time", height=520, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
@@ -555,6 +563,13 @@ def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dic
         "advanced_metric": st.session_state.get(f"{prefix}_advanced_metric", "power"),
         "advanced_wwz_decay": str(st.session_state.get(f"{prefix}_advanced_wwz_decay", 0.0125)),
     }
+    if st.session_state.get(f"{prefix}_advanced_constrain_track", False):
+        track_period = st.session_state.get(f"{prefix}_advanced_track_period")
+        if track_period is not None:
+            fields["advanced_track_period"] = str(track_period)
+            fields["advanced_track_width_fraction"] = str(
+                float(st.session_state.get(f"{prefix}_advanced_track_width_percent", 10.0)) / 100.0
+            )
     if periods:
         fields["fold_fit_periods"] = ",".join(f"{p:.12g}" for p in periods)
     if excluded:
@@ -861,6 +876,38 @@ def advanced_controls(prefix: str, location=st) -> None:
     location.number_input("Minimum points per window", min_value=3, value=st.session_state.get(f"{prefix}_advanced_min_points", 30), step=5, key=f"{prefix}_advanced_min_points")
     if st.session_state[f"{prefix}_advanced_method"] == "v1":
         location.selectbox("Color metric", ["power", "amplitude"], key=f"{prefix}_advanced_metric")
+        constrain_track = location.checkbox(
+            "Keep best-period track near a detected period",
+            value=st.session_state.get(f"{prefix}_advanced_constrain_track", False),
+            key=f"{prefix}_advanced_constrain_track",
+        )
+        if constrain_track:
+            options = period_options(result, "peaks") | period_options(result, "residual_peaks")
+            if options:
+                selected_track_period = location.selectbox(
+                    "Track reference period",
+                    options=list(options.keys()),
+                    format_func=lambda period: options[period],
+                    key=f"{prefix}_advanced_track_period",
+                )
+                period_unit = (result or {}).get("period_unit", labels["baseline"])
+                location.number_input(
+                    "Track half-width [%]",
+                    min_value=0.1,
+                    max_value=100.0,
+                    value=float(st.session_state.get(f"{prefix}_advanced_track_width_percent", 10.0)),
+                    step=1.0,
+                    format="%.1f",
+                    key=f"{prefix}_advanced_track_width_percent",
+                )
+                half_width = float(st.session_state.get(f"{prefix}_advanced_track_width_percent", 10.0)) / 100.0
+                location.caption(
+                    f"Track will search around {float(selected_track_period):.6g} {period_unit} "
+                    f"within +/- {100.0 * half_width:.1f}%."
+                )
+            else:
+                st.session_state.pop(f"{prefix}_advanced_track_period", None)
+                location.caption("Run an analysis with detected periods before constraining the track.")
     else:
         st.session_state[f"{prefix}_advanced_metric"] = "WWZ"
         location.number_input("WWZ decay", min_value=0.0001, value=st.session_state.get(f"{prefix}_advanced_wwz_decay", 0.0125), step=0.0025, format="%.5f", key=f"{prefix}_advanced_wwz_decay")

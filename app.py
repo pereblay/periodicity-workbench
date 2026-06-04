@@ -1129,6 +1129,22 @@ def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
     metric = fields.get("advanced_metric", "power")
     if metric not in {"power", "amplitude"}:
         raise ValueError("Advanced metric must be 'power' or 'amplitude'")
+    track_period = optional_float(fields.get("advanced_track_period"))
+    track_width_fraction = optional_float(fields.get("advanced_track_width_fraction"))
+    track_mask = None
+    track_min_period = None
+    track_max_period = None
+    if track_period is not None and track_width_fraction is not None and track_width_fraction > 0:
+        if track_period <= 0:
+            raise ValueError("Advanced track period must be positive")
+        track_half_width = track_period * track_width_fraction
+        track_min_period = track_period - track_half_width
+        track_max_period = track_period + track_half_width
+        track_mask = (period_axis >= track_min_period) & (period_axis <= track_max_period)
+        if not np.any(track_mask):
+            closest_idx = int(np.nanargmin(np.abs(period_axis - track_period)))
+            track_mask = np.zeros_like(period_axis, dtype=bool)
+            track_mask[closest_idx] = True
 
     rows = []
     valid_centers = []
@@ -1153,7 +1169,11 @@ def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
         rows.append(values)
         valid_centers.append(float(center))
         counts.append(n_local)
-        best_idx = int(np.nanargmax(values))
+        if track_mask is not None:
+            masked_values = np.where(track_mask, values, np.nan)
+            best_idx = int(np.nanargmax(masked_values))
+        else:
+            best_idx = int(np.nanargmax(values))
         best_periods.append(float(period_axis[best_idx]))
         best_values.append(float(values[best_idx]))
 
@@ -1187,6 +1207,9 @@ def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
         "counts": counts,
         "best_period": best_periods,
         "best_value": best_values,
+        "track_period": track_period,
+        "track_min_period": track_min_period,
+        "track_max_period": track_max_period,
         "message": message,
     }
 
