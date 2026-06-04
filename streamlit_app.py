@@ -811,6 +811,7 @@ def folded_controls(prefix: str, location=st) -> None:
 def prewhitening_controls(prefix: str, location=st) -> None:
     result = st.session_state.get("app_result")
     frequency_label = (result or {}).get("frequency_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["frequency"])
+    period_unit = (result or {}).get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
     location.caption(
         "Residual LS uses the global Frequency Search range: "
         f"{float(st.session_state.get(f'{prefix}_fmin', 0.01)):.6g} - "
@@ -831,20 +832,35 @@ def prewhitening_controls(prefix: str, location=st) -> None:
         )
         selected_period = label_to_period.get(selected_label)
         if selected_period is not None:
-            period_unit = (result or {}).get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
             location.caption(f"Selected for next step: {float(selected_period):.6g} {period_unit}")
     else:
         location.caption("Run an analysis to populate candidates.")
+    manual_period_text = location.text_input(
+        f"Manual period for next step [{period_unit}]",
+        value=st.session_state.get(f"{prefix}_manual_prewhitening_period", ""),
+        key=f"{prefix}_manual_prewhitening_period",
+        placeholder="Optional; overrides dropdown",
+    )
     if st.session_state.get("app_prewhitening_periods"):
-        period_unit = (result or {}).get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
         location.caption("Chain: " + ", ".join(f"{p:.4g} {period_unit}" for p in st.session_state["app_prewhitening_periods"]))
     cols = location.columns(3)
     if cols[0].button("Next step", use_container_width=True, key=f"{prefix}_next_step"):
-        if selected_period is None:
-            location.error("Choose a detected period first.")
+        period_to_add = selected_period
+        if manual_period_text.strip():
+            try:
+                manual_periods = parse_periods(manual_period_text)
+            except ValueError as exc:
+                location.error(str(exc))
+                return
+            if len(manual_periods) != 1:
+                location.error("Enter one manual period for the next prewhitening step.")
+                return
+            period_to_add = manual_periods[0]
+        if period_to_add is None:
+            location.error("Choose a detected period or enter one manual period first.")
         else:
             st.session_state["app_prewhitening_periods"] = unique_periods(
-                st.session_state.get("app_prewhitening_periods", []) + [float(selected_period)]
+                st.session_state.get("app_prewhitening_periods", []) + [float(period_to_add)]
             )
             fields = fields_from_state(prefix, bootstrap_override=0)
             with st.spinner("Running prewhitening step..."):
