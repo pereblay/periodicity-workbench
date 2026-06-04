@@ -39,6 +39,12 @@ def clear_analysis_state() -> None:
     st.session_state["prewhitening_periods"] = []
 
 
+def clear_workspace_state() -> None:
+    clear_analysis_state()
+    st.session_state.pop("uploaded_file_signature", None)
+    st.session_state["upload_widget_key"] = st.session_state.get("upload_widget_key", 0) + 1
+
+
 def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
     rows = []
     for peak in peaks:
@@ -576,11 +582,14 @@ st.caption("Lomb-Scargle, sampling-window checks, bootstrap errors, prewhitening
 
 with st.sidebar:
     st.header("Input")
+    if "upload_widget_key" not in st.session_state:
+        st.session_state["upload_widget_key"] = 0
     uploaded = st.file_uploader(
         "Text table (.txt, .dat, or no extension)",
         type=["txt", "dat"],
         accept_multiple_files=False,
         help="Files without extension can be uploaded by choosing 'All files' in the file picker.",
+        key=f"uploaded_file_{st.session_state['upload_widget_key']}",
     )
     if uploaded is None:
         if st.session_state.get("uploaded_file_signature") is not None:
@@ -600,6 +609,7 @@ with st.sidebar:
     use_error_col = st.checkbox("Use error column", value=True)
 
     run = st.button("Run analysis", type="primary", use_container_width=True)
+    clear_workspace = st.button("Clear workspace", use_container_width=True)
 
     st.subheader("Frequency Search")
     fmin = st.number_input("Min frequency [cycles/day]", min_value=0.0, value=0.01, step=0.001, format="%.6f")
@@ -870,6 +880,11 @@ def run_with_last_file(fields: dict[str, str], spinner_text: str) -> dict:
         return run_analysis(fields, file_bytes, filename)
 
 
+if clear_workspace:
+    clear_workspace_state()
+    st.rerun()
+
+
 if update_folded:
     if "last_result" not in st.session_state:
         st.error("Run an analysis before updating the folded profile.")
@@ -967,6 +982,7 @@ if (
     and not update_folded
     and not update_uncertainties
     and not run_advanced
+    and not clear_workspace
 ):
     live_signature = current_live_signature()
     previous_signature = st.session_state.get("last_live_signature")
