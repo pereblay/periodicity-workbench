@@ -210,6 +210,7 @@ def classify_peaks(
     frequency: np.ndarray,
     window_power: np.ndarray,
     baseline: float,
+    min_window_period: float = 0.0,
     window_power_threshold: float = 0.01,
     relative_tolerance: float = 0.01,
     short_period_limit: float = 2.0,
@@ -229,15 +230,10 @@ def classify_peaks(
             peak_window_threshold = min(window_power_threshold, short_period_window_threshold)
             peak_relative_tolerance = max(relative_tolerance, short_period_relative_tolerance)
 
-        peak_grid_index = int(np.argmin(np.abs(frequency - peak.frequency)))
-        if window_power[peak_grid_index] >= peak_window_threshold:
-            peak.kind = "sampling-window artefact"
-            peak.window_frequency = float(frequency[peak_grid_index])
-            peak.window_period = float(1.0 / frequency[peak_grid_index])
-            peak.window_power = float(window_power[peak_grid_index])
-            continue
-
-        eligible = ranked[window_power[ranked] >= peak_window_threshold]
+        eligible = ranked[
+            (window_power[ranked] >= peak_window_threshold)
+            & ((1.0 / frequency[ranked]) >= min_window_period)
+        ]
         if len(eligible) == 0:
             continue
         distances = np.abs(frequency[eligible] - peak.frequency)
@@ -247,7 +243,7 @@ def classify_peaks(
         freq_tolerance = max(grid_tolerance, peak_relative_tolerance * peak.frequency)
         period_grid_tolerance = grid_tolerance / max(peak.frequency**2, 1e-12)
         period_tolerance = max(2.0 * period_grid_tolerance, peak_relative_tolerance * peak.period)
-        if freq_delta <= freq_tolerance or period_delta <= period_tolerance:
+        if freq_delta <= freq_tolerance and period_delta <= period_tolerance:
             peak.kind = "sampling-window artefact"
             peak.window_frequency = float(frequency[nearest])
             peak.window_period = float(1.0 / frequency[nearest])
@@ -805,6 +801,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         freq,
         win,
         float(t.max() - t.min()),
+        min_window_period=min_considered_period,
         window_power_threshold=window_artifact_power,
         relative_tolerance=window_artifact_tolerance,
     )
@@ -826,6 +823,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         freq,
         win,
         float(t.max() - t.min()),
+        min_window_period=min_considered_period,
         window_power_threshold=window_artifact_power,
         relative_tolerance=window_artifact_tolerance,
     )
@@ -863,6 +861,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             freq,
             win,
             float(t.max() - t.min()),
+            min_window_period=min_considered_period,
             window_power_threshold=window_artifact_power,
             relative_tolerance=window_artifact_tolerance,
         )
@@ -884,6 +883,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             freq,
             win,
             float(t.max() - t.min()),
+            min_window_period=min_considered_period,
             window_power_threshold=window_artifact_power,
             relative_tolerance=window_artifact_tolerance,
         )
