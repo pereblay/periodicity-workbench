@@ -58,8 +58,23 @@ SUSPICIOUS_SHELL_PATTERNS = [
         r"(?:^|\s)(?:&&|\|\||;|>|<)(?:\s|$)",
     ]
 ]
-NUMERIC_TABLE_LINE = re.compile(r"^[\s,+\-0-9.eEdD]+$")
+NUMERIC_VALUE_TOKEN = re.compile(r"^[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eEdD][+\-]?\d+)?$")
+MISSING_VALUE_TOKENS = {"nan", "null", "none", "na", "n/a", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}
 COMMENT_PREFIXES = ("#", "%")
+
+
+def is_numeric_table_row(line: str) -> bool:
+    tokens = line.replace(",", " ").split()
+    if not tokens:
+        return False
+    for token in tokens:
+        lower_token = token.lower()
+        if lower_token in MISSING_VALUE_TOKENS:
+            continue
+        if NUMERIC_VALUE_TOKEN.match(token):
+            continue
+        return False
+    return True
 
 
 def validate_upload(filename: str, raw: bytes) -> str:
@@ -88,10 +103,10 @@ def validate_upload(filename: str, raw: bytes) -> str:
         stripped = line.strip()
         if not stripped or stripped.startswith(COMMENT_PREFIXES):
             continue
-        if not NUMERIC_TABLE_LINE.match(stripped.replace(",", " ")):
+        if not is_numeric_table_row(stripped):
             raise ValueError(
                 f"Line {line_number} is not a numeric table row or a comment. "
-                "Use '#' or '%' for comments and numeric columns for data."
+                "Use '#' or '%' for comments and numeric columns for data; NULL/NaN values are allowed."
             )
         numeric_rows += 1
     if numeric_rows < 10:
