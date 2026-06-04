@@ -859,19 +859,27 @@ def prewhitening_controls(prefix: str, location=st) -> None:
         if period_to_add is None:
             location.error("Choose a detected period or enter one manual period first.")
         else:
+            previous_chain = list(st.session_state.get("app_prewhitening_periods", []))
             st.session_state["app_prewhitening_periods"] = unique_periods(
-                st.session_state.get("app_prewhitening_periods", []) + [float(period_to_add)]
+                previous_chain + [float(period_to_add)]
             )
             fields = fields_from_state(prefix, bootstrap_override=0)
             with st.spinner("Running prewhitening step..."):
-                st.session_state["app_result"] = run_with_current_file(fields)
-                st.session_state["app_fields"] = fields
+                try:
+                    st.session_state["app_result"] = run_with_current_file(fields)
+                    st.session_state["app_fields"] = fields
+                    st.session_state["app_show_model"] = False
+                except ValueError as exc:
+                    st.session_state["app_prewhitening_periods"] = previous_chain
+                    location.error(str(exc))
+                    return
             st.session_state[f"{prefix}_next_prewhitening_select_version"] = (
                 st.session_state.get(f"{prefix}_next_prewhitening_select_version", 0) + 1
             )
             st.rerun()
     if cols[1].button("Show model", use_container_width=True, key=f"{prefix}_show_model"):
         st.session_state["app_show_model"] = True
+        st.rerun()
     location.checkbox("Show model and O-C errors", value=True, key=f"{prefix}_show_model_errors")
     if cols[2].button("Clear chain", use_container_width=True, key=f"{prefix}_clear_chain"):
         st.session_state["app_prewhitening_periods"] = []
