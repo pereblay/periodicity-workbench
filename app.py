@@ -104,7 +104,7 @@ def read_columns(
     filename: str,
     time_col: int,
     flux_col: int,
-    error_col: int,
+    error_col: int | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     text = validate_upload(filename, raw)
     numeric_text = "\n".join(
@@ -116,12 +116,22 @@ def read_columns(
     if data.ndim != 2:
         raise ValueError("Could not parse the uploaded text file as a numeric table")
     max_col = data.shape[1] - 1
-    for col in [time_col, flux_col, error_col]:
+    required_cols = [time_col, flux_col]
+    if error_col is not None:
+        required_cols.append(error_col)
+    for col in required_cols:
         if col < 0 or col > max_col:
             raise ValueError(f"Column index {col + 1} is outside the available range 1-{data.shape[1]}")
-    t, y, dy = data[:, time_col], data[:, flux_col], data[:, error_col]
-    good = np.isfinite(t) & np.isfinite(y) & np.isfinite(dy) & (dy > 0)
+    t, y = data[:, time_col], data[:, flux_col]
+    if error_col is None:
+        dy = np.ones_like(y, dtype=float)
+        good = np.isfinite(t) & np.isfinite(y)
+    else:
+        dy = data[:, error_col]
+        good = np.isfinite(t) & np.isfinite(y) & np.isfinite(dy) & (dy > 0)
     if good.sum() < 10:
+        if error_col is None:
+            raise ValueError("Need at least 10 valid rows with finite time and flux values")
         raise ValueError("Need at least 10 valid rows with finite values and positive errors")
     t, y, dy = t[good], y[good], dy[good]
     order = np.argsort(t)
@@ -765,7 +775,8 @@ def empty_analysis_result(
 def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "uploaded.dat") -> dict:
     time_col = int(fields.get("time_col", "1")) - 1
     flux_col = int(fields.get("flux_col", "2")) - 1
-    error_col = int(fields.get("error_col", "3")) - 1
+    error_col_raw = fields.get("error_col", "3").strip().lower()
+    error_col = None if error_col_raw in {"", "none", "0", "no"} else int(error_col_raw) - 1
     fmin = float(fields.get("fmin", "0.01"))
     fmax = float(fields.get("fmax", "1.0"))
     samples_per_peak = float(fields.get("samples_per_peak", "10"))

@@ -596,7 +596,8 @@ with st.sidebar:
     col_a, col_b, col_c = st.columns(3)
     time_col = col_a.number_input("Time", min_value=1, value=1, step=1)
     flux_col = col_b.number_input("Flux", min_value=1, value=2, step=1)
-    error_col = col_c.number_input("Error", min_value=1, value=3, step=1)
+    use_error_col = col_c.checkbox("Use error", value=True)
+    error_col = col_c.number_input("Error", min_value=1, value=3, step=1, disabled=not use_error_col)
 
     run = st.button("Run analysis", type="primary", use_container_width=True)
 
@@ -819,7 +820,7 @@ def current_fields(bootstrap_value: int | None = None) -> dict[str, str]:
     fields = {
         "time_col": str(time_col),
         "flux_col": str(flux_col),
-        "error_col": str(error_col),
+        "error_col": str(error_col) if use_error_col else "",
         "fmin": str(fmin),
         "fmax": str(fmax),
         "samples_per_peak": str(samples_per_peak),
