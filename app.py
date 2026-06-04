@@ -785,6 +785,7 @@ def empty_analysis_result(
     labels: dict[str, str] | None = None,
 ) -> dict:
     labels = labels or unit_labels("days")
+    flux_is_magnitude = str((fields or {}).get("flux_is_magnitude", "")).strip().lower() in {"1", "true", "yes", "on"}
     period = 1.0 / freq
     residual_power = np.zeros_like(power)
     folded = empty_folded_payload()
@@ -806,6 +807,7 @@ def empty_analysis_result(
         "folded_period": folded_period,
         "t0": float(t0 if t0 is not None else t[0]),
         "has_error_column": has_error_column,
+        "flux_is_magnitude": flux_is_magnitude,
         **labels,
         "excluded_periods": [],
         "exclusion_tolerance": None,
@@ -862,6 +864,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
     fold_bins = int(fields.get("fold_bins", "10"))
     labels = unit_labels(fields.get("time_unit", "days"))
+    flux_is_magnitude = str(fields.get("flux_is_magnitude", "")).strip().lower() in {"1", "true", "yes", "on"}
     t, y, dy = read_columns(file_bytes, filename, time_col, flux_col, error_col)
     t, y, dy = apply_data_limits(t, y, dy, fields)
     has_error_column = error_col is not None
@@ -985,6 +988,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "folded_period": folded_period,
         "t0": t0,
         "has_error_column": has_error_column,
+        "flux_is_magnitude": flux_is_magnitude,
         **labels,
         "excluded_periods": excluded_periods,
         "exclusion_tolerance": exclusion_tolerance,

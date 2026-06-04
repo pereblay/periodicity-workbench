@@ -87,6 +87,24 @@ def optional_state_float(prefix: str, name: str) -> float | None:
     return float(value)
 
 
+def flux_is_magnitude(result: dict | None = None) -> bool:
+    if result is not None and "flux_is_magnitude" in result:
+        return bool(result["flux_is_magnitude"])
+    return bool(st.session_state.get("l1_flux_is_magnitude", False))
+
+
+def flux_axis_title(result: dict | None = None) -> str:
+    return "Magnitude" if flux_is_magnitude(result) else "Flux"
+
+
+def apply_flux_axis(fig: go.Figure, result: dict | None = None, row: int | None = None, col: int | None = None) -> None:
+    if flux_is_magnitude(result):
+        if row is not None and col is not None:
+            fig.update_yaxes(autorange="reversed", row=row, col=col)
+        else:
+            fig.update_yaxes(autorange="reversed")
+
+
 def suggested_frequency_range_from_bytes(file_bytes: bytes | None, time_column: int, time_unit: str = "days") -> tuple[float, float, str] | None:
     if file_bytes is None:
         return None
@@ -171,7 +189,7 @@ def raw_preview_figure(
             mode="markers",
             marker=dict(color="#20242a", size=4),
             name="Selected data",
-            hovertemplate="Time=%{x:.6g}<br>Flux=%{y:.6g}<extra></extra>",
+            hovertemplate="Time=%{x:.6g}<br>Value=%{y:.6g}<extra></extra>",
         )
     )
     if np.any(~good):
@@ -182,17 +200,18 @@ def raw_preview_figure(
                 mode="markers",
                 marker=dict(color="#b8bec8", size=3, opacity=0.45),
                 name="Outside limits",
-                hovertemplate="Time=%{x:.6g}<br>Flux=%{y:.6g}<extra></extra>",
+                hovertemplate="Time=%{x:.6g}<br>Value=%{y:.6g}<extra></extra>",
             )
         )
     fig.update_layout(
         title="Uploaded light curve preview",
         xaxis_title=labels["time"],
-        yaxis_title="Flux",
+        yaxis_title=flux_axis_title(),
         height=300,
         margin=dict(l=20, r=20, t=45, b=20),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
     )
+    apply_flux_axis(fig)
     return frame(fig)
 
 
@@ -356,8 +375,9 @@ def folded_plot(result: dict) -> go.Figure:
     for maximum in result.get("folded_maxima", []):
         for offset in [0.0, 1.0]:
             fig.add_vline(x=maximum["phase"] + offset, line_dash="dash", line_color="#2457a6", opacity=0.75)
-    fig.update_layout(title="Folded profile", xaxis_title="Orbital phase", yaxis_title="Weighted mean flux", height=430, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+    fig.update_layout(title="Folded profile", xaxis_title="Orbital phase", yaxis_title=f"Weighted mean {flux_axis_title(result).lower()}", height=430, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
     fig.update_xaxes(range=[0, 2])
+    apply_flux_axis(fig, result)
     return frame(fig)
 
 
@@ -463,7 +483,7 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
         line=dict(width=0),
         marker=dict(color="#20242a", size=5),
         name="Original data",
-        hovertemplate="Time=%{x:.5f}<br>Flux=%{y:.6g}<extra></extra>",
+        hovertemplate="Time=%{x:.5f}<br>Value=%{y:.6g}<extra></extra>",
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=time,
@@ -505,7 +525,8 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
             bgcolor="rgba(255,255,255,0.85)",
         ),
     )
-    fig.update_yaxes(title_text="Flux", row=1, col=1)
+    fig.update_yaxes(title_text=flux_axis_title(result), row=1, col=1)
+    apply_flux_axis(fig, result, row=1, col=1)
     fig.update_yaxes(title_text="O-C", row=2, col=1)
     fig.update_xaxes(title_text=result.get("time_label", "Time [d]"), row=2, col=1)
     return frame(fig)
@@ -535,6 +556,7 @@ def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dic
         "time_col": str(st.session_state.get(f"{prefix}_time_col", 1)),
         "flux_col": str(st.session_state.get(f"{prefix}_flux_col", 2)),
         "error_col": str(st.session_state.get(f"{prefix}_error_col", 3)) if st.session_state.get(f"{prefix}_use_error", True) else "",
+        "flux_is_magnitude": "true" if st.session_state.get(f"{prefix}_flux_is_magnitude", False) else "false",
         "time_unit": st.session_state.get(f"{prefix}_time_unit", "days"),
         "xmin": str(st.session_state.get(f"{prefix}_xmin", "")).strip(),
         "xmax": str(st.session_state.get(f"{prefix}_xmax", "")).strip(),
@@ -618,7 +640,7 @@ def input_controls(prefix: str, location=st) -> None:
     cols[0].number_input("Time", min_value=1, value=st.session_state.get(f"{prefix}_time_col", 1), key=f"{prefix}_time_col")
     cols[1].number_input("Flux", min_value=1, value=st.session_state.get(f"{prefix}_flux_col", 2), key=f"{prefix}_flux_col")
     cols[2].number_input("Error", min_value=1, value=st.session_state.get(f"{prefix}_error_col", 3), key=f"{prefix}_error_col")
-    option_cols = location.columns([0.56, 0.44])
+    option_cols = location.columns([0.42, 0.29, 0.29])
     option_cols[0].selectbox(
         "Time units",
         ["days", "seconds"],
@@ -626,6 +648,7 @@ def input_controls(prefix: str, location=st) -> None:
         key=f"{prefix}_time_unit",
     )
     option_cols[1].checkbox("Use error column", value=st.session_state.get(f"{prefix}_use_error", True), key=f"{prefix}_use_error")
+    option_cols[2].checkbox("Flux is magnitude", value=st.session_state.get(f"{prefix}_flux_is_magnitude", False), key=f"{prefix}_flux_is_magnitude")
     location.caption("Analysis limits")
     limit_cols = location.columns(4)
     limit_cols[0].text_input("xmin", value=st.session_state.get(f"{prefix}_xmin", ""), key=f"{prefix}_xmin", placeholder="auto")
