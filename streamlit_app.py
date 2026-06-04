@@ -830,8 +830,30 @@ def advanced_controls(prefix: str, location=st) -> None:
     method_label = location.radio("Method", ["v1 Sliding LS", "v2 WWZ"], horizontal=True, key=f"{prefix}_advanced_method_label")
     st.session_state[f"{prefix}_advanced_method"] = "v2" if method_label == "v2 WWZ" else "v1"
     cols = location.columns(2)
-    cols[0].number_input(f"Advanced min frequency [{frequency_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_fmin", st.session_state.get(f"{prefix}_fmin", 0.01)), step=0.001, format="%.6f", key=f"{prefix}_advanced_fmin")
-    cols[1].number_input(f"Advanced max frequency [{frequency_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_fmax", st.session_state.get(f"{prefix}_fmax", 1.0)), step=0.01, format="%.6f", key=f"{prefix}_advanced_fmax")
+    advanced_fmin_value = max(
+        float(st.session_state.get(f"{prefix}_advanced_fmin", st.session_state.get(f"{prefix}_fmin", 0.01))),
+        1e-12,
+    )
+    advanced_fmax_value = max(
+        float(st.session_state.get(f"{prefix}_advanced_fmax", st.session_state.get(f"{prefix}_fmax", 1.0))),
+        1e-12,
+    )
+    cols[0].number_input(
+        f"Advanced min frequency [{frequency_unit}]",
+        min_value=1e-12,
+        value=advanced_fmin_value,
+        step=0.001,
+        format="%.6f",
+        key=f"{prefix}_advanced_fmin",
+    )
+    cols[1].number_input(
+        f"Advanced max frequency [{frequency_unit}]",
+        min_value=1e-12,
+        value=advanced_fmax_value,
+        step=0.01,
+        format="%.6f",
+        key=f"{prefix}_advanced_fmax",
+    )
     cols = location.columns(3)
     cols[0].number_input("Period bins", min_value=20, max_value=1000, value=st.session_state.get(f"{prefix}_advanced_bins", 200), step=20, key=f"{prefix}_advanced_bins")
     cols[1].number_input(f"Window width [{time_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_width", 100.0), step=10.0, key=f"{prefix}_advanced_width")
@@ -848,12 +870,21 @@ def advanced_controls(prefix: str, location=st) -> None:
             location.error("Run an analysis first.")
         else:
             fields = fields_from_state(prefix, bootstrap_override=0)
+            advanced_fmin = float(fields.get("advanced_fmin", fields.get("fmin", "0.01")))
+            advanced_fmax = float(fields.get("advanced_fmax", fields.get("fmax", "1.0")))
+            if advanced_fmin <= 0 or advanced_fmax <= advanced_fmin:
+                location.error("Advanced frequency range must satisfy 0 < min frequency < max frequency.")
+                return
             with st.spinner("Running advanced map..."):
-                advanced = advanced_time_frequency_map(result, fields)
-                advanced["show_best_track"] = show_track
-                advanced["period_label"] = result.get("period_label", labels["period"])
-                st.session_state["app_advanced_result"] = advanced
-            st.rerun()
+                try:
+                    advanced = advanced_time_frequency_map(result, fields)
+                    advanced["show_best_track"] = show_track
+                    advanced["period_label"] = result.get("period_label", labels["period"])
+                    st.session_state["app_advanced_result"] = advanced
+                except ValueError as exc:
+                    location.error(str(exc))
+                else:
+                    st.rerun()
 
 
 def render_search_outputs(result: dict | None) -> None:
