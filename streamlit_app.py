@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from app import advanced_time_frequency_map, run_analysis, update_folded_profile, validate_upload
+from app import advanced_time_frequency_map, read_columns, run_analysis, update_folded_profile, validate_upload
 
 
 st.set_page_config(
@@ -74,7 +74,20 @@ def unique_periods(periods: list[float], tolerance: float = 1e-5) -> list[float]
     return out
 
 
-def suggested_frequency_range_from_bytes(file_bytes: bytes | None, time_column: int) -> tuple[float, float, str] | None:
+def axis_labels(time_unit: str) -> dict[str, str]:
+    if (time_unit or "days").lower().startswith("sec"):
+        return {"time": "Time [s]", "period": "Period [s]", "frequency": "Frequency [Hz]", "baseline": "s"}
+    return {"time": "Time [d]", "period": "Period [d]", "frequency": "Frequency [cycles/day]", "baseline": "d"}
+
+
+def optional_state_float(prefix: str, name: str) -> float | None:
+    value = str(st.session_state.get(f"{prefix}_{name}", "")).strip()
+    if not value:
+        return None
+    return float(value)
+
+
+def suggested_frequency_range_from_bytes(file_bytes: bytes | None, time_column: int, time_unit: str = "days") -> tuple[float, float, str] | None:
     if file_bytes is None:
         return None
     try:
@@ -104,11 +117,12 @@ def suggested_frequency_range_from_bytes(file_bytes: bytes | None, time_column: 
     fmax = min(0.5 / median_dt, 20.0)
     if fmax <= fmin:
         fmax = fmin * 10.0
-    return fmin, fmax, f"Suggested from time span {baseline:.1f} d and median sampling {median_dt:.3g} d."
+    labels = axis_labels(time_unit)
+    return fmin, fmax, f"Suggested from time span {baseline:.1f} {labels['baseline']} and median sampling {median_dt:.3g} {labels['baseline']}."
 
 
-def suggested_frequency_range(uploaded_file, time_column: int) -> tuple[float, float, str] | None:
-    return suggested_frequency_range_from_bytes(None if uploaded_file is None else uploaded_file.getvalue(), time_column)
+def suggested_frequency_range(uploaded_file, time_column: int, time_unit: str = "days") -> tuple[float, float, str] | None:
+    return suggested_frequency_range_from_bytes(None if uploaded_file is None else uploaded_file.getvalue(), time_column, time_unit)
 
 
 def file_preview_dataframe(file_bytes: bytes, filename: str, max_rows: int = 12) -> pd.DataFrame:
@@ -128,7 +142,61 @@ def file_preview_dataframe(file_bytes: bytes, filename: str, max_rows: int = 12)
     return pd.DataFrame(data, columns=[f"Column {index}" for index in range(1, data.shape[1] + 1)])
 
 
-def suggested_frequency_range_from_time(time_values: list[float] | np.ndarray) -> tuple[float, float, str] | None:
+def raw_preview_figure(
+    file_bytes: bytes,
+    filename: str,
+    prefix: str,
+) -> go.Figure:
+    time_col = int(st.session_state.get(f"{prefix}_time_col", 1)) - 1
+    flux_col = int(st.session_state.get(f"{prefix}_flux_col", 2)) - 1
+    use_error = bool(st.session_state.get(f"{prefix}_use_error", True))
+    error_col = int(st.session_state.get(f"{prefix}_error_col", 3)) - 1 if use_error else None
+    time, flux, error = read_columns(file_bytes, filename, time_col, flux_col, error_col)
+    good = np.ones_like(time, dtype=bool)
+    for name, op in [("xmin", np.greater_equal), ("xmax", np.less_equal)]:
+        value = optional_state_float(prefix, name)
+        if value is not None:
+            good &= op(time, value)
+    for name, op in [("ymin", np.greater_equal), ("ymax", np.less_equal)]:
+        value = optional_state_float(prefix, name)
+        if value is not None:
+            good &= op(flux, value)
+    labels = axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=time[good],
+            y=flux[good],
+            error_y=dict(type="data", array=error[good], visible=use_error),
+            mode="markers",
+            marker=dict(color="#20242a", size=4),
+            name="Selected data",
+            hovertemplate="Time=%{x:.6g}<br>Flux=%{y:.6g}<extra></extra>",
+        )
+    )
+    if np.any(~good):
+        fig.add_trace(
+            go.Scatter(
+                x=time[~good],
+                y=flux[~good],
+                mode="markers",
+                marker=dict(color="#b8bec8", size=3, opacity=0.45),
+                name="Outside limits",
+                hovertemplate="Time=%{x:.6g}<br>Flux=%{y:.6g}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        title="Uploaded light curve preview",
+        xaxis_title=labels["time"],
+        yaxis_title="Flux",
+        height=300,
+        margin=dict(l=20, r=20, t=45, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+    )
+    return frame(fig)
+
+
+def suggested_frequency_range_from_time(time_values: list[float] | np.ndarray, time_unit: str = "days") -> tuple[float, float, str] | None:
     time = np.sort(np.asarray(time_values, dtype=float))
     time = time[np.isfinite(time)]
     dt = np.diff(time)
@@ -143,7 +211,8 @@ def suggested_frequency_range_from_time(time_values: list[float] | np.ndarray) -
     fmax = min(0.5 / median_dt, 20.0)
     if fmax <= fmin:
         fmax = fmin * 10.0
-    return fmin, fmax, f"Suggested from time span {baseline:.1f} d and median sampling {median_dt:.3g} d."
+    labels = axis_labels(time_unit)
+    return fmin, fmax, f"Suggested from time span {baseline:.1f} {labels['baseline']} and median sampling {median_dt:.3g} {labels['baseline']}."
 
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,14 +223,14 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
     return clean_dataframe(pd.DataFrame([
         {
             "label": peak["label"],
-            "period_d": peak["period"],
-            "period_err_d": peak["period_error"],
-            "frequency_c_d": peak["frequency"],
-            "frequency_err_c_d": peak["frequency_error"],
+            "period": peak["period"],
+            "period_error": peak["period_error"],
+            "frequency": peak["frequency"],
+            "frequency_error": peak["frequency_error"],
             "power": peak["power"],
             "FAP": f"{float(peak['fap']):.5f}",
             "type": peak["kind"],
-            "window_period_d": peak["window_period"],
+            "window_period": peak["window_period"],
         }
         for peak in peaks
     ]))
@@ -170,21 +239,23 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
 def period_options(result: dict | None, key: str) -> dict[float, str]:
     if not result:
         return {}
+    period_unit = result.get("period_unit", "d")
     options = {}
     for peak in result.get(key, []):
         period = float(peak["period"])
-        options[period] = f"{peak['label']} - {period:.4f} d ({peak['kind']})"
+        options[period] = f"{peak['label']} - {period:.4g} {period_unit} ({peak['kind']})"
     return options
 
 
 def exclusion_options(result: dict | None) -> dict[float, str]:
     if not result:
         return {}
+    period_unit = result.get("period_unit", "d")
     options = {}
     for group, key in [("detected", "peaks"), ("prewhitened", "residual_peaks")]:
         for peak in result.get(key, []):
             period = float(peak["period"])
-            options[period] = f"{group}: {peak['label']} - {period:.4f} d ({peak['kind']})"
+            options[period] = f"{group}: {peak['label']} - {period:.4g} {period_unit} ({peak['kind']})"
     return options
 
 
@@ -216,7 +287,7 @@ def frame(fig: go.Figure) -> go.Figure:
     return fig
 
 
-def add_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") -> None:
+def add_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power", period_unit: str = "d") -> None:
     for peak in peaks:
         color = "#b13b32" if "artefact" in peak["kind"] else "#777777" if "excluded" in peak["kind"] else "#2457a6"
         if peak.get(y_key) is None:
@@ -227,7 +298,7 @@ def add_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") -> None
             y=[peak[y_key]],
             mode="markers+text",
             marker=dict(color=color, size=7),
-            text=[f"{peak['period']:.2f} d"],
+            text=[f"{peak['period']:.3g} {period_unit}"],
             textposition="top right",
             showlegend=False,
         ))
@@ -236,9 +307,9 @@ def add_markers(fig: go.Figure, peaks: list[dict], y_key: str = "power") -> None
 def periodogram(result: dict, key: str, peaks_key: str, title: str) -> go.Figure:
     series = result["series"]
     fig = go.Figure(go.Scatter(x=series["period"], y=series[key], mode="lines", line=dict(color="#20242a", width=1.2)))
-    add_markers(fig, result.get(peaks_key, []))
+    add_markers(fig, result.get(peaks_key, []), period_unit=result.get("period_unit", "d"))
     yr = y_range([peak.get("power") for peak in result.get(peaks_key, [])]) or y_range(series[key])
-    fig.update_layout(title=title, xaxis_title="Period [d]", yaxis_title="Lomb-Scargle power", height=430, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+    fig.update_layout(title=title, xaxis_title=result.get("period_label", "Period [d]"), yaxis_title="Lomb-Scargle power", height=430, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
     if yr:
         fig.update_yaxes(range=yr)
     return frame(fig)
@@ -253,7 +324,7 @@ def window_plot(result: dict) -> go.Figure:
     for peak in peaks[:50]:
         fig.add_vline(x=peak["period"], line_dash="dash", line_color="#b13b32", opacity=0.2)
     yr = y_range([p["power"] for p in peaks]) or y_range(series["window_power"])
-    fig.update_layout(title="Sampling window", xaxis_title="Period [d]", yaxis_title="Sampling-window power", height=430, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+    fig.update_layout(title="Sampling window", xaxis_title=result.get("period_label", "Period [d]"), yaxis_title="Sampling-window power", height=430, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
     if yr:
         fig.update_yaxes(range=yr)
     return frame(fig)
@@ -299,12 +370,12 @@ def folded_period_table(result: dict) -> pd.DataFrame:
         rows.append(
             {
                 "role": "folding period" if index == 1 and folded_period == period else f"fit period {index}",
-                "period_d": period,
+                "period": period,
                 "frequency_ratio_in_phase": ratios[index - 1] if index - 1 < len(ratios) else None,
             }
         )
-    if folded_period is not None and not any(abs(float(folded_period) - float(row["period_d"])) < 1e-8 for row in rows):
-        rows.insert(0, {"role": "folding period", "period_d": folded_period, "frequency_ratio_in_phase": 1.0})
+    if folded_period is not None and not any(abs(float(folded_period) - float(row["period"])) < 1e-8 for row in rows):
+        rows.insert(0, {"role": "folding period", "period": folded_period, "frequency_ratio_in_phase": 1.0})
     return clean_dataframe(pd.DataFrame(rows))
 
 
@@ -337,7 +408,7 @@ def folded_fit_summary(result: dict) -> pd.DataFrame:
         phase_max = (np.arctan2(sin_coeff, cos_coeff) / (2.0 * np.pi * ratio)) % (1.0 / ratio)
         rows.append(
             {
-                "period_d": periods[idx] if idx < len(periods) else None,
+                "period": periods[idx] if idx < len(periods) else None,
                 "frequency_ratio": ratio,
                 "amplitude": amplitude,
                 "phase_of_max": phase_max,
@@ -436,7 +507,7 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
     )
     fig.update_yaxes(title_text="Flux", row=1, col=1)
     fig.update_yaxes(title_text="O-C", row=2, col=1)
-    fig.update_xaxes(title_text="Time", row=2, col=1)
+    fig.update_xaxes(title_text=result.get("time_label", "Time [d]"), row=2, col=1)
     return frame(fig)
 
 
@@ -445,7 +516,7 @@ def advanced_plot(advanced: dict) -> go.Figure:
     fig = go.Figure(go.Heatmap(x=advanced.get("period", []), y=advanced.get("time", []), z=advanced.get("values", []), colorscale="Viridis", colorbar=dict(title=metric)))
     if advanced.get("show_best_track", True) and advanced.get("best_period"):
         fig.add_trace(go.Scatter(x=advanced["best_period"], y=advanced["time"], mode="lines+markers", line=dict(color="white", width=2), marker=dict(color="white", size=4), showlegend=False))
-    fig.update_layout(title=advanced.get("method_label", "Advanced map"), xaxis_title="Period [d]", yaxis_title="Window center time", height=520, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+    fig.update_layout(title=advanced.get("method_label", "Advanced map"), xaxis_title=advanced.get("period_label", "Period [d]"), yaxis_title="Window center time", height=520, margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
     return frame(fig)
 
 
@@ -456,6 +527,11 @@ def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dic
         "time_col": str(st.session_state.get(f"{prefix}_time_col", 1)),
         "flux_col": str(st.session_state.get(f"{prefix}_flux_col", 2)),
         "error_col": str(st.session_state.get(f"{prefix}_error_col", 3)) if st.session_state.get(f"{prefix}_use_error", True) else "",
+        "time_unit": st.session_state.get(f"{prefix}_time_unit", "days"),
+        "xmin": str(st.session_state.get(f"{prefix}_xmin", "")).strip(),
+        "xmax": str(st.session_state.get(f"{prefix}_xmax", "")).strip(),
+        "ymin": str(st.session_state.get(f"{prefix}_ymin", "")).strip(),
+        "ymax": str(st.session_state.get(f"{prefix}_ymax", "")).strip(),
         "fmin": str(st.session_state.get(f"{prefix}_fmin", 0.01)),
         "fmax": str(st.session_state.get(f"{prefix}_fmax", 1.0)),
         "samples_per_peak": str(st.session_state.get(f"{prefix}_samples_per_peak", 10.0)),
@@ -503,7 +579,7 @@ def input_controls(prefix: str, location=st) -> None:
         st.session_state["app_upload_key"] = 0
     uploaded = location.file_uploader(
         "Text table (.txt, .dat, or no extension)",
-        type=["txt", "dat"],
+        type=None,
         accept_multiple_files=False,
         key=f"app_upload_{st.session_state['app_upload_key']}",
     )
@@ -512,53 +588,82 @@ def input_controls(prefix: str, location=st) -> None:
         if signature != st.session_state.get("app_file_signature"):
             clear_state()
             st.session_state["app_file_signature"] = signature
-            suggestion = suggested_frequency_range(uploaded, int(st.session_state.get(f"{prefix}_time_col", 1)))
+            suggestion = suggested_frequency_range(
+                uploaded,
+                int(st.session_state.get(f"{prefix}_time_col", 1)),
+                st.session_state.get(f"{prefix}_time_unit", "days"),
+            )
             if suggestion:
                 st.session_state[f"{prefix}_fmin"] = suggestion[0]
                 st.session_state[f"{prefix}_fmax"] = suggestion[1]
                 st.session_state[f"{prefix}_frequency_suggestion"] = suggestion
         st.session_state["app_file_bytes"] = uploaded.getvalue()
         st.session_state["app_filename"] = uploaded.name
-        try:
-            preview = file_preview_dataframe(st.session_state["app_file_bytes"], st.session_state["app_filename"])
-        except ValueError as exc:
-            location.error(str(exc))
-            preview = pd.DataFrame()
-        if not preview.empty:
-            location.caption("File preview")
-            location.dataframe(preview, use_container_width=True, hide_index=True)
     cols = location.columns(3)
     cols[0].number_input("Time", min_value=1, value=st.session_state.get(f"{prefix}_time_col", 1), key=f"{prefix}_time_col")
     cols[1].number_input("Flux", min_value=1, value=st.session_state.get(f"{prefix}_flux_col", 2), key=f"{prefix}_flux_col")
     cols[2].number_input("Error", min_value=1, value=st.session_state.get(f"{prefix}_error_col", 3), key=f"{prefix}_error_col")
-    location.checkbox("Use error column", value=st.session_state.get(f"{prefix}_use_error", True), key=f"{prefix}_use_error")
+    option_cols = location.columns([0.56, 0.44])
+    option_cols[0].selectbox(
+        "Time units",
+        ["days", "seconds"],
+        index=0 if st.session_state.get(f"{prefix}_time_unit", "days") == "days" else 1,
+        key=f"{prefix}_time_unit",
+    )
+    option_cols[1].checkbox("Use error column", value=st.session_state.get(f"{prefix}_use_error", True), key=f"{prefix}_use_error")
+    location.caption("Analysis limits")
+    limit_cols = location.columns(4)
+    limit_cols[0].text_input("xmin", value=st.session_state.get(f"{prefix}_xmin", ""), key=f"{prefix}_xmin", placeholder="auto")
+    limit_cols[1].text_input("xmax", value=st.session_state.get(f"{prefix}_xmax", ""), key=f"{prefix}_xmax", placeholder="auto")
+    limit_cols[2].text_input("ymin", value=st.session_state.get(f"{prefix}_ymin", ""), key=f"{prefix}_ymin", placeholder="auto")
+    limit_cols[3].text_input("ymax", value=st.session_state.get(f"{prefix}_ymax", ""), key=f"{prefix}_ymax", placeholder="auto")
+    if "app_file_bytes" in st.session_state:
+        try:
+            preview = file_preview_dataframe(st.session_state["app_file_bytes"], st.session_state["app_filename"])
+            if not preview.empty:
+                location.caption("File preview")
+                location.dataframe(preview, use_container_width=True, hide_index=True)
+            location.plotly_chart(
+                raw_preview_figure(st.session_state["app_file_bytes"], st.session_state["app_filename"], prefix),
+                use_container_width=True,
+            )
+        except ValueError as exc:
+            location.error(str(exc))
     action_cols = location.columns(2)
     if action_cols[0].button("Run analysis", type="primary", use_container_width=True, key=f"{prefix}_run"):
         fields = fields_from_state(prefix)
         with st.spinner("Running analysis..."):
-            st.session_state["app_result"] = run_with_current_file(fields)
-            st.session_state["app_fields"] = fields
-            st.session_state.pop("app_advanced_result", None)
-            st.session_state["app_show_model"] = False
-        st.rerun()
+            try:
+                st.session_state["app_result"] = run_with_current_file(fields)
+                st.session_state["app_fields"] = fields
+                st.session_state.pop("app_advanced_result", None)
+                st.session_state["app_show_model"] = False
+            except ValueError as exc:
+                location.error(str(exc))
+            else:
+                st.rerun()
     if action_cols[1].button("Clear workspace", use_container_width=True, key=f"{prefix}_clear"):
         clear_state(reset_file=True)
         st.rerun()
 
 
 def search_controls(prefix: str, location=st) -> None:
+    time_unit = st.session_state.get(f"{prefix}_time_unit", "days")
     suggestion = suggested_frequency_range_from_bytes(
         st.session_state.get("app_file_bytes"),
         int(st.session_state.get(f"{prefix}_time_col", 1)),
+        time_unit,
     )
     if suggestion is None and st.session_state.get("app_result"):
-        suggestion = suggested_frequency_range_from_time(st.session_state["app_result"]["series"]["time"])
+        suggestion = suggested_frequency_range_from_time(st.session_state["app_result"]["series"]["time"], time_unit)
     if suggestion is not None:
         st.session_state[f"{prefix}_frequency_suggestion"] = suggestion
     else:
         suggestion = st.session_state.get(f"{prefix}_frequency_suggestion")
     if suggestion:
-        location.info(f"{suggestion[2]}\n\nSuggested range: {suggestion[0]:.6f} - {suggestion[1]:.6f} cycles/day.")
+        labels = axis_labels(time_unit)
+        frequency_unit = "Hz" if labels["baseline"] == "s" else "cycles/day"
+        location.info(f"{suggestion[2]}\n\nSuggested range: {suggestion[0]:.6g} - {suggestion[1]:.6g} {frequency_unit}.")
         if location.button("Use suggested frequency range", use_container_width=True, key=f"{prefix}_use_suggested_frequency"):
             st.session_state[f"{prefix}_fmin"] = float(suggestion[0])
             st.session_state[f"{prefix}_fmax"] = float(suggestion[1])
@@ -566,12 +671,13 @@ def search_controls(prefix: str, location=st) -> None:
     else:
         location.caption("Upload a file to estimate a frequency range from baseline and sampling.")
     cols = location.columns(2)
-    cols[0].number_input("Min frequency [cycles/day]", min_value=0.0, step=0.001, format="%.6f", key=f"{prefix}_fmin", value=st.session_state.get(f"{prefix}_fmin", 0.01))
-    cols[1].number_input("Max frequency [cycles/day]", min_value=0.0, step=0.01, format="%.6f", key=f"{prefix}_fmax", value=st.session_state.get(f"{prefix}_fmax", 1.0))
+    frequency_label = axis_labels(time_unit)["frequency"]
+    cols[0].number_input(f"Min {frequency_label}", min_value=0.0, step=0.001, format="%.6f", key=f"{prefix}_fmin", value=st.session_state.get(f"{prefix}_fmin", 0.01))
+    cols[1].number_input(f"Max {frequency_label}", min_value=0.0, step=0.01, format="%.6f", key=f"{prefix}_fmax", value=st.session_state.get(f"{prefix}_fmax", 1.0))
     cols = location.columns(2)
     cols[0].number_input("Samples per peak", min_value=1.0, value=st.session_state.get(f"{prefix}_samples_per_peak", 10.0), step=1.0, key=f"{prefix}_samples_per_peak")
     cols[1].number_input("Max considered peaks", min_value=1, max_value=20, value=st.session_state.get(f"{prefix}_max_peaks", 6), step=1, key=f"{prefix}_max_peaks")
-    location.number_input("Minimum considered period [d]", min_value=0.0, value=st.session_state.get(f"{prefix}_min_period", 2.0), step=0.1, key=f"{prefix}_min_period")
+    location.number_input(f"Minimum considered {axis_labels(time_unit)['period']}", min_value=0.0, value=st.session_state.get(f"{prefix}_min_period", 2.0), step=0.1, key=f"{prefix}_min_period")
     cols = location.columns(2)
     cols[0].number_input("Sampling-window threshold", min_value=0.0, value=st.session_state.get(f"{prefix}_window_threshold", 0.01), step=0.005, format="%.4f", key=f"{prefix}_window_threshold")
     cols[1].number_input("Sampling-window tolerance", min_value=0.001, value=st.session_state.get(f"{prefix}_window_tolerance", 0.01), step=0.001, format="%.3f", key=f"{prefix}_window_tolerance")
@@ -594,6 +700,7 @@ def uncertainty_controls(prefix: str, location=st) -> None:
 
 def manual_exclusion_controls(prefix: str, location=st) -> None:
     result = st.session_state.get("app_result")
+    period_unit = (result or {}).get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
     options = exclusion_options(result)
     selected = location.multiselect(
         "Exclude periods from primary selection",
@@ -601,7 +708,7 @@ def manual_exclusion_controls(prefix: str, location=st) -> None:
         format_func=lambda period: options[period],
         key=f"{prefix}_selected_exclusions",
     )
-    manual = location.text_input("Additional excluded periods [d]", key=f"{prefix}_manual_exclusions")
+    manual = location.text_input(f"Additional excluded periods [{period_unit}]", key=f"{prefix}_manual_exclusions")
     excluded = list(selected)
     if manual.strip():
         try:
@@ -611,7 +718,7 @@ def manual_exclusion_controls(prefix: str, location=st) -> None:
     st.session_state[f"{prefix}_excluded_periods"] = unique_periods(excluded)
     location.number_input("Manual exclusion tolerance", min_value=0.001, value=st.session_state.get(f"{prefix}_exclusion_tolerance", 0.015), step=0.001, format="%.3f", key=f"{prefix}_exclusion_tolerance")
     if excluded:
-        location.caption("Excluded: " + ", ".join(f"{period:.4f} d" for period in st.session_state[f"{prefix}_excluded_periods"]))
+        location.caption("Excluded: " + ", ".join(f"{period:.4g} {period_unit}" for period in st.session_state[f"{prefix}_excluded_periods"]))
     if location.button("Apply exclusions", use_container_width=True, key=f"{prefix}_apply_exclusions"):
         if "app_file_bytes" not in st.session_state:
             location.error("Upload a file and run the analysis first.")
@@ -625,9 +732,11 @@ def manual_exclusion_controls(prefix: str, location=st) -> None:
 
 def folded_controls(prefix: str, location=st) -> None:
     result = st.session_state.get("app_result")
+    period_unit = (result or {}).get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
+    time_label = (result or {}).get("time_label", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["time"])
     cols = location.columns(2)
     cols[0].number_input("Phase bins", min_value=4, max_value=80, value=st.session_state.get(f"{prefix}_fold_bins", 10), key=f"{prefix}_fold_bins")
-    cols[1].text_input("T0 / MJD", value=st.session_state.get(f"{prefix}_t0", ""), key=f"{prefix}_t0")
+    cols[1].text_input(f"T0 ({time_label})", value=st.session_state.get(f"{prefix}_t0", ""), key=f"{prefix}_t0")
     mode = location.radio("Folded-fit frequencies", ["harmonics", "selected"], horizontal=True, key=f"{prefix}_fold_mode")
     if mode == "harmonics":
         location.number_input("Number of harmonics", min_value=1, max_value=8, value=st.session_state.get(f"{prefix}_fold_harmonics", 1), key=f"{prefix}_fold_harmonics")
@@ -635,13 +744,13 @@ def folded_controls(prefix: str, location=st) -> None:
         if result and result.get("folded_period"):
             location.caption(
                 "Folding period: "
-                + f"{float(result['folded_period']):.6g} d; fitted periods: "
-                + ", ".join(f"{float(period):.6g} d" for period in result.get("fold_fit_periods", []))
+                + f"{float(result['folded_period']):.6g} {period_unit}; fitted periods: "
+                + ", ".join(f"{float(period):.6g} {period_unit}" for period in result.get("fold_fit_periods", []))
             )
     else:
         options = period_options(result, "peaks") | period_options(result, "residual_peaks")
         selected = location.multiselect("Use detected periods", options=list(options.keys()), format_func=lambda p: options[p], key=f"{prefix}_detected_fold_periods")
-        manual = location.text_input("Additional periods [d]", key=f"{prefix}_manual_periods")
+        manual = location.text_input(f"Additional periods [{period_unit}]", key=f"{prefix}_manual_periods")
         periods = list(selected)
         if manual.strip():
             try:
@@ -652,7 +761,7 @@ def folded_controls(prefix: str, location=st) -> None:
         if st.session_state[f"{prefix}_selected_periods"]:
             location.caption(
                 "Folding on first selected period; fitted periods: "
-                + ", ".join(f"{period:.6g} d" for period in st.session_state[f"{prefix}_selected_periods"])
+                + ", ".join(f"{period:.6g} {period_unit}" for period in st.session_state[f"{prefix}_selected_periods"])
             )
     if location.button("Update folded profile", use_container_width=True, key=f"{prefix}_update_fold"):
         current_result = st.session_state.get("app_result")
@@ -667,10 +776,11 @@ def folded_controls(prefix: str, location=st) -> None:
 
 def prewhitening_controls(prefix: str, location=st) -> None:
     result = st.session_state.get("app_result")
+    frequency_label = (result or {}).get("frequency_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["frequency"])
     location.caption(
         "Residual LS uses the global Frequency Search range: "
         f"{float(st.session_state.get(f'{prefix}_fmin', 0.01)):.6g} - "
-        f"{float(st.session_state.get(f'{prefix}_fmax', 1.0)):.6g} cycles/day."
+        f"{float(st.session_state.get(f'{prefix}_fmax', 1.0)):.6g} {frequency_label}."
     )
     options = period_options(result, "residual_peaks") or period_options(result, "peaks")
     selected_period = None
@@ -687,11 +797,13 @@ def prewhitening_controls(prefix: str, location=st) -> None:
         )
         selected_period = label_to_period.get(selected_label)
         if selected_period is not None:
-            location.caption(f"Selected for next step: {float(selected_period):.6g} d")
+            period_unit = (result or {}).get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
+            location.caption(f"Selected for next step: {float(selected_period):.6g} {period_unit}")
     else:
         location.caption("Run an analysis to populate candidates.")
     if st.session_state.get("app_prewhitening_periods"):
-        location.caption("Chain: " + ", ".join(f"{p:.4f} d" for p in st.session_state["app_prewhitening_periods"]))
+        period_unit = (result or {}).get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
+        location.caption("Chain: " + ", ".join(f"{p:.4g} {period_unit}" for p in st.session_state["app_prewhitening_periods"]))
     cols = location.columns(3)
     if cols[0].button("Next step", use_container_width=True, key=f"{prefix}_next_step"):
         if selected_period is None:
@@ -724,15 +836,18 @@ def prewhitening_controls(prefix: str, location=st) -> None:
 
 def advanced_controls(prefix: str, location=st) -> None:
     result = st.session_state.get("app_result")
+    labels = axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))
+    frequency_unit = (result or {}).get("frequency_unit", "Hz" if labels["baseline"] == "s" else "cycles/day")
+    time_unit = (result or {}).get("baseline_unit", labels["baseline"])
     method_label = location.radio("Method", ["v1 Sliding LS", "v2 WWZ"], horizontal=True, key=f"{prefix}_advanced_method_label")
     st.session_state[f"{prefix}_advanced_method"] = "v2" if method_label == "v2 WWZ" else "v1"
     cols = location.columns(2)
-    cols[0].number_input("Advanced min frequency", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_fmin", st.session_state.get(f"{prefix}_fmin", 0.01)), step=0.001, format="%.6f", key=f"{prefix}_advanced_fmin")
-    cols[1].number_input("Advanced max frequency", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_fmax", st.session_state.get(f"{prefix}_fmax", 1.0)), step=0.01, format="%.6f", key=f"{prefix}_advanced_fmax")
+    cols[0].number_input(f"Advanced min frequency [{frequency_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_fmin", st.session_state.get(f"{prefix}_fmin", 0.01)), step=0.001, format="%.6f", key=f"{prefix}_advanced_fmin")
+    cols[1].number_input(f"Advanced max frequency [{frequency_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_fmax", st.session_state.get(f"{prefix}_fmax", 1.0)), step=0.01, format="%.6f", key=f"{prefix}_advanced_fmax")
     cols = location.columns(3)
     cols[0].number_input("Period bins", min_value=20, max_value=1000, value=st.session_state.get(f"{prefix}_advanced_bins", 200), step=20, key=f"{prefix}_advanced_bins")
-    cols[1].number_input("Window width [d]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_width", 100.0), step=10.0, key=f"{prefix}_advanced_width")
-    cols[2].number_input("Window step [d]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_step", 25.0), step=5.0, key=f"{prefix}_advanced_step")
+    cols[1].number_input(f"Window width [{time_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_width", 100.0), step=10.0, key=f"{prefix}_advanced_width")
+    cols[2].number_input(f"Window step [{time_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_step", 25.0), step=5.0, key=f"{prefix}_advanced_step")
     location.number_input("Minimum points per window", min_value=3, value=st.session_state.get(f"{prefix}_advanced_min_points", 30), step=5, key=f"{prefix}_advanced_min_points")
     if st.session_state[f"{prefix}_advanced_method"] == "v1":
         location.selectbox("Color metric", ["power", "amplitude"], key=f"{prefix}_advanced_metric")
@@ -748,6 +863,7 @@ def advanced_controls(prefix: str, location=st) -> None:
             with st.spinner("Running advanced map..."):
                 advanced = advanced_time_frequency_map(result, fields)
                 advanced["show_best_track"] = show_track
+                advanced["period_label"] = result.get("period_label", labels["period"])
                 st.session_state["app_advanced_result"] = advanced
             st.rerun()
 
@@ -758,9 +874,11 @@ def render_search_outputs(result: dict | None) -> None:
         return
     metric_cols = st.columns(4)
     metric_cols[0].metric("Rows used", f"{result['n_points']}")
-    metric_cols[1].metric("Baseline", f"{result['baseline']:.1f} d")
+    baseline_unit = result.get("baseline_unit", "d")
+    period_unit = result.get("period_unit", "d")
+    metric_cols[1].metric("Baseline", f"{result['baseline']:.4g} {baseline_unit}")
     primary = result.get("primary_period")
-    metric_cols[2].metric("Primary period", "" if primary is None else f"{float(primary):.4f} d")
+    metric_cols[2].metric("Primary period", "" if primary is None else f"{float(primary):.6g} {period_unit}")
     metric_cols[3].metric("T0", f"{float(result.get('t0', 0.0)):.4f}")
     cols = st.columns(3)
     cols[0].plotly_chart(periodogram(result, "power", "peaks", "Lomb-Scargle periodogram"), use_container_width=True)
@@ -775,7 +893,7 @@ def render_search_outputs(result: dict | None) -> None:
     st.dataframe(peaks_dataframe(result.get("peaks", [])), use_container_width=True, hide_index=True)
     dl_cols = st.columns(3)
     with dl_cols[0]:
-        dataframe_download("Download LS data", pd.DataFrame({"period": result["series"]["period"], "power": result["series"]["power"]}), "lomb_scargle_periodogram.txt", "app_download_ls")
+        dataframe_download("Download LS data", pd.DataFrame({"period": result["series"]["period"], "frequency": result["series"]["frequency"], "power": result["series"]["power"]}), "lomb_scargle_periodogram.txt", "app_download_ls")
     with dl_cols[1]:
         dataframe_download("Download window data", pd.DataFrame({"period": result["series"]["period"], "window_power": result["series"]["window_power"]}), "sampling_window.txt", "app_download_window")
     with dl_cols[2]:

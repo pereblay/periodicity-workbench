@@ -153,6 +153,71 @@ def read_columns(
     return t[order], y[order], dy[order]
 
 
+def optional_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    return float(cleaned)
+
+
+def normalize_time_unit(time_unit: str) -> str:
+    normalized = (time_unit or "days").strip().lower()
+    if normalized in {"s", "sec", "secs", "second", "seconds"}:
+        return "seconds"
+    if normalized in {"d", "day", "days"}:
+        return "days"
+    raise ValueError("Time units must be days or seconds")
+
+
+def unit_labels(time_unit: str) -> dict[str, str]:
+    normalized = normalize_time_unit(time_unit)
+    if normalized == "seconds":
+        return {
+            "time_unit": "seconds",
+            "time_label": "Time [s]",
+            "period_label": "Period [s]",
+            "frequency_label": "Frequency [Hz]",
+            "baseline_unit": "s",
+            "period_unit": "s",
+            "frequency_unit": "Hz",
+        }
+    return {
+        "time_unit": "days",
+        "time_label": "Time [d]",
+        "period_label": "Period [d]",
+        "frequency_label": "Frequency [cycles/day]",
+        "baseline_unit": "d",
+        "period_unit": "d",
+        "frequency_unit": "cycles/day",
+    }
+
+
+def apply_data_limits(
+    t: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    fields: dict[str, str],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    xmin = optional_float(fields.get("xmin"))
+    xmax = optional_float(fields.get("xmax"))
+    ymin = optional_float(fields.get("ymin"))
+    ymax = optional_float(fields.get("ymax"))
+    good = np.ones_like(t, dtype=bool)
+    if xmin is not None:
+        good &= t >= xmin
+    if xmax is not None:
+        good &= t <= xmax
+    if ymin is not None:
+        good &= y >= ymin
+    if ymax is not None:
+        good &= y <= ymax
+    if good.sum() < 10:
+        raise ValueError("Need at least 10 valid rows after applying the selected x/y limits")
+    return t[good], y[good], dy[good]
+
+
 def frequency_grid(t: np.ndarray, fmin: float, fmax: float, samples_per_peak: float) -> np.ndarray:
     baseline = float(t.max() - t.min())
     if baseline <= 0:
@@ -717,7 +782,9 @@ def empty_analysis_result(
     fields: dict[str, str] | None = None,
     t0: float | None = None,
     has_error_column: bool = True,
+    labels: dict[str, str] | None = None,
 ) -> dict:
+    labels = labels or unit_labels("days")
     period = 1.0 / freq
     residual_power = np.zeros_like(power)
     folded = empty_folded_payload()
@@ -739,6 +806,7 @@ def empty_analysis_result(
         "folded_period": folded_period,
         "t0": float(t0 if t0 is not None else t[0]),
         "has_error_column": has_error_column,
+        **labels,
         "excluded_periods": [],
         "exclusion_tolerance": None,
         "has_prewhitening": False,
@@ -793,7 +861,9 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     n_bootstrap = int(fields.get("n_bootstrap", "1000"))
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
     fold_bins = int(fields.get("fold_bins", "10"))
+    labels = unit_labels(fields.get("time_unit", "days"))
     t, y, dy = read_columns(file_bytes, filename, time_col, flux_col, error_col)
+    t, y, dy = apply_data_limits(t, y, dy, fields)
     has_error_column = error_col is not None
     y_offset = weighted_median(y, 1.0 / dy**2)
     y_analysis = y - y_offset
@@ -855,6 +925,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             fields=fields,
             t0=t0,
             has_error_column=has_error_column,
+            labels=labels,
         )
     primary = candidate_peaks[0]
     prewhiten_base_periods = prewhiten_periods
@@ -914,6 +985,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "folded_period": folded_period,
         "t0": t0,
         "has_error_column": has_error_column,
+        **labels,
         "excluded_periods": excluded_periods,
         "exclusion_tolerance": exclusion_tolerance,
         "has_prewhitening": bool(prewhitening_table),
