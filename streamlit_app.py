@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -43,6 +45,42 @@ def clear_workspace_state() -> None:
     clear_analysis_state()
     st.session_state.pop("uploaded_file_signature", None)
     st.session_state["upload_widget_key"] = st.session_state.get("upload_widget_key", 0) + 1
+
+
+def suggested_frequency_range(uploaded_file, time_column: int) -> tuple[float, float, str] | None:
+    if uploaded_file is None:
+        return None
+    try:
+        text = uploaded_file.getvalue().decode("ascii")
+        numeric_text = "\n".join(
+            line for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith(("#", "%"))
+        )
+        data = np.genfromtxt(io.StringIO(numeric_text.replace(",", " ")), invalid_raise=False)
+    except Exception:
+        return None
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    if data.ndim != 2 or data.shape[0] < 3 or time_column < 1 or time_column > data.shape[1]:
+        return None
+    time = np.asarray(data[:, time_column - 1], dtype=float)
+    time = np.sort(time[np.isfinite(time)])
+    if len(time) < 3:
+        return None
+    dt = np.diff(time)
+    dt = dt[dt > 0]
+    if len(dt) == 0:
+        return None
+    baseline = float(time[-1] - time[0])
+    median_dt = float(np.median(dt))
+    if baseline <= 0 or median_dt <= 0:
+        return None
+    fmin_suggested = max(1.0 / baseline, 1e-5)
+    fmax_suggested = min(0.5 / median_dt, 20.0)
+    if fmax_suggested <= fmin_suggested:
+        fmax_suggested = fmin_suggested * 10.0
+    caption = f"Suggested from time span {baseline:.1f} d and median sampling {median_dt:.3g} d."
+    return fmin_suggested, fmax_suggested, caption
 
 
 def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
@@ -636,8 +674,32 @@ with st.sidebar:
     clear_workspace = st.button("Clear workspace", use_container_width=True)
 
     st.subheader("Frequency Search")
-    fmin = st.number_input("Min frequency [cycles/day]", min_value=0.0, value=0.01, step=0.001, format="%.6f")
-    fmax = st.number_input("Max frequency [cycles/day]", min_value=0.0, value=1.0, step=0.01, format="%.6f")
+    frequency_suggestion = suggested_frequency_range(uploaded, int(time_col))
+    suggestion_key = (st.session_state.get("uploaded_file_signature"), int(time_col))
+    if frequency_suggestion and st.session_state.get("frequency_suggestion_key") != suggestion_key:
+        st.session_state["fmin_input"] = float(frequency_suggestion[0])
+        st.session_state["fmax_input"] = float(frequency_suggestion[1])
+        st.session_state["frequency_suggestion_key"] = suggestion_key
+    if "fmin_input" not in st.session_state:
+        st.session_state["fmin_input"] = 0.01
+    if "fmax_input" not in st.session_state:
+        st.session_state["fmax_input"] = 1.0
+    if frequency_suggestion:
+        st.caption(frequency_suggestion[2])
+    fmin = st.number_input(
+        "Min frequency [cycles/day]",
+        min_value=0.0,
+        step=0.001,
+        format="%.6f",
+        key="fmin_input",
+    )
+    fmax = st.number_input(
+        "Max frequency [cycles/day]",
+        min_value=0.0,
+        step=0.01,
+        format="%.6f",
+        key="fmax_input",
+    )
     samples_per_peak = st.number_input("Samples per peak", min_value=1.0, value=10.0, step=1.0)
     max_peaks = st.number_input("Max considered peaks", min_value=1, max_value=20, value=6, step=1)
     min_considered_period = st.number_input("Minimum considered period [d]", min_value=0.0, value=2.0, step=0.1)
