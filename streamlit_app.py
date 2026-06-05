@@ -1283,6 +1283,8 @@ def render_search_outputs(result: dict | None) -> None:
     if not result:
         st.info("Run an analysis to show plots.")
         return
+    st.divider()
+    st.subheader("Frequency analysis")
     metric_cols = st.columns(4)
     metric_cols[0].metric("Rows used", f"{result['n_points']}")
     baseline_unit = result.get("baseline_unit", "d")
@@ -1341,6 +1343,8 @@ def render_secondary_outputs(result: dict | None) -> None:
     if not result:
         return
     if result.get("has_prewhitening"):
+        st.divider()
+        st.subheader("Iterative prewhitening")
         cols = st.columns([1.2, 1.0])
         cols[0].plotly_chart(periodogram(result, "residual_power", "residual_peaks", "After prewhitening"), use_container_width=True)
         with cols[1]:
@@ -1360,6 +1364,8 @@ def render_secondary_outputs(result: dict | None) -> None:
         )
     advanced = st.session_state.get("app_advanced_result")
     if advanced:
+        st.divider()
+        st.subheader("Period tomography")
         st.plotly_chart(advanced_plot(advanced), use_container_width=True)
 
 
@@ -1367,6 +1373,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
     model_result = st.session_state.get("app_model_lab_result")
     if not result or not model_result:
         return
+    st.divider()
     st.subheader("Model laboratory")
     if model_result.get("family") == "fourier":
         st.plotly_chart(model_lab_fourier_plot(model_result, result), use_container_width=True)
