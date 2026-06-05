@@ -50,6 +50,13 @@ STATE_KEYS = [
     "app_show_model",
 ]
 
+HELP_URL = "https://github.com/pereblay/periodicity-workbench/blob/main/HELP.md"
+
+
+def help_link(anchor: str = "") -> str:
+    suffix = f"#{anchor}" if anchor else ""
+    return f"[Help]({HELP_URL}{suffix})"
+
 
 def file_signature(uploaded_file) -> tuple[str, int, str]:
     data = uploaded_file.getvalue()
@@ -1959,6 +1966,7 @@ def layout_one() -> None:
             advanced_controls(prefix, st)
         with st.expander("Model Laboratory", expanded=False):
             model_lab_controls(prefix, st)
+        st.markdown(help_link())
     result = st.session_state.get("app_result")
     render_file_preview(prefix)
     render_search_outputs(result)
