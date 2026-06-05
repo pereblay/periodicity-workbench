@@ -633,17 +633,6 @@ def prewhitening_terms_from_periods(
                 "frequency_error": None if main_peak is None else main_peak.frequency_error,
             }
         )
-        for order, harmonic in detected_harmonics_for_period(period, peaks):
-            terms.append(
-                {
-                    "label": f"step {idx} detected P/{order} harmonic",
-                    "frequency": harmonic.frequency,
-                    "main_period": period,
-                    "main_period_error": None if main_peak is None else main_peak.period_error,
-                    "period_error": harmonic.period_error,
-                    "frequency_error": harmonic.frequency_error,
-                }
-            )
     return terms
 
 
