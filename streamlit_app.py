@@ -1398,6 +1398,8 @@ def render_binary_orbital_highlight(model_result: dict, app_result: dict) -> Non
         secondary_phase = model_parameter_value(model_result, "secondary_phase")
         primary_depth = model_parameter_value(model_result, "primary_depth")
         secondary_depth = model_parameter_value(model_result, "secondary_depth")
+        primary_width = model_parameter_value(model_result, "primary_width_phase")
+        secondary_width = model_parameter_value(model_result, "secondary_width_phase")
         if primary_phase is not None:
             lines.append(f"<strong>Primary eclipse phase:</strong> {primary_phase:.5g}")
         if secondary_phase is not None:
@@ -1405,10 +1407,16 @@ def render_binary_orbital_highlight(model_result: dict, app_result: dict) -> Non
             lines.append(f"<strong>Secondary eclipse phase:</strong> {secondary_phase:.5g}")
             if separation is not None:
                 lines.append(f"<strong>Eclipse separation:</strong> {separation:.5g} in phase")
+                lines.append(f"<strong>Offset from 0.5 separation:</strong> {separation - 0.5:+.5g} in phase")
         if primary_depth is not None:
             lines.append(f"<strong>Primary depth/sign:</strong> {primary_depth:.5g}")
         if secondary_depth is not None:
             lines.append(f"<strong>Secondary depth/sign:</strong> {secondary_depth:.5g}")
+        if primary_depth is not None and abs(primary_depth) > 0.0 and secondary_depth is not None:
+            lines.append(f"<strong>Depth ratio |secondary/primary|:</strong> {abs(secondary_depth / primary_depth):.5g}")
+        if primary_width is not None and abs(primary_width) > 0.0 and secondary_width is not None:
+            lines.append(f"<strong>Width ratio secondary/primary:</strong> {secondary_width / primary_width:.5g}")
+        lines.append("<strong>Pedagogical hint:</strong> depth and width ratios trace relative brightness/radius geometry, while separation away from 0.5 can suggest eccentric geometry or phase-reference effects.")
         lines.append("<strong>Eccentricity:</strong> not directly constrained by the empirical eclipse model")
         lines.append("<strong>Inclination / mass ratio:</strong> require a physical binary model such as ellc or external constraints")
     if summary.get("BIC") is not None:
