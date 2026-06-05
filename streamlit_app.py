@@ -408,43 +408,45 @@ def folded_period_table(result: dict) -> pd.DataFrame:
 
 
 def folded_fit_summary(result: dict) -> pd.DataFrame:
-    series = result["series"]
-    phase = np.asarray(series["fold_phase"], dtype=float)
-    flux = np.asarray(series["fold_flux"], dtype=float)
-    error = np.asarray(series["fold_error"], dtype=float)
-    ratios = [float(value) for value in result.get("fold_fit_ratios", [])]
+    terms = result.get("fold_fit_terms", [])
     periods = [float(value) for value in result.get("fold_fit_periods", [])]
-    good = np.isfinite(phase) & np.isfinite(flux) & np.isfinite(error) & (error > 0)
-    phase, flux, error = phase[good], flux[good], error[good]
-    if len(phase) == 0 or not ratios:
+    if not terms:
         return pd.DataFrame()
-    columns = [np.ones_like(phase)]
-    for ratio in ratios:
-        columns.extend([np.cos(2.0 * np.pi * ratio * phase), np.sin(2.0 * np.pi * ratio * phase)])
-    design = np.column_stack(columns)
-    weights = 1.0 / error**2
-    coeff, *_ = np.linalg.lstsq(design * np.sqrt(weights)[:, None], flux * np.sqrt(weights), rcond=None)
-    model = design @ coeff
-    residuals = flux - model
-    rms = float(np.sqrt(np.mean(residuals**2)))
-    weighted_rms = float(np.sqrt(np.average(residuals**2, weights=weights)))
     rows = []
-    for idx, ratio in enumerate(ratios):
-        cos_coeff = float(coeff[1 + 2 * idx])
-        sin_coeff = float(coeff[2 + 2 * idx])
-        amplitude = float(np.hypot(cos_coeff, sin_coeff))
-        phase_max = (np.arctan2(sin_coeff, cos_coeff) / (2.0 * np.pi * ratio)) % (1.0 / ratio)
-        rows.append(
-            {
-                "period": periods[idx] if idx < len(periods) else None,
-                "frequency_ratio": ratio,
-                "amplitude": amplitude,
-                "phase_of_max": phase_max,
-                "rms": rms,
-                "weighted_rms": weighted_rms,
-            }
-        )
+    for idx, term in enumerate(terms):
+        row = dict(term)
+        row["period"] = periods[idx] if idx < len(periods) else None
+        rows.append(row)
     return clean_dataframe(pd.DataFrame(rows))
+
+
+def fit_equation_text(terms: list[dict], variable: str = "t") -> str:
+    if not terms:
+        return ""
+    offset = float(terms[0].get("offset", 0.0) or 0.0)
+    if len(terms) > 3:
+        return f"y({variable}) = C + sum_i [a_i cos(2 pi f_i {variable}) + b_i sin(2 pi f_i {variable})]"
+    pieces = [f"y({variable}) = {offset:.6g}"]
+    for idx, term in enumerate(terms, start=1):
+        freq = term.get("frequency", term.get("frequency_ratio"))
+        cos_coeff = float(term.get("cos_coeff", 0.0) or 0.0)
+        sin_coeff = float(term.get("sin_coeff", 0.0) or 0.0)
+        pieces.append(f"{cos_coeff:+.6g} cos(2 pi * {float(freq):.6g} * {variable})")
+        pieces.append(f"{sin_coeff:+.6g} sin(2 pi * {float(freq):.6g} * {variable})")
+    return " ".join(pieces)
+
+
+def global_fit_summary(terms: list[dict]) -> pd.DataFrame:
+    if not terms:
+        return pd.DataFrame()
+    first = terms[0]
+    return clean_dataframe(pd.DataFrame([{
+        "method": first.get("fit_method"),
+        "offset": first.get("offset"),
+        "rms": first.get("rms"),
+        "weighted_rms": first.get("weighted_rms"),
+        "chi2_red": first.get("chi2_red"),
+    }]))
 
 
 def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure:
@@ -455,25 +457,18 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
     error = np.asarray(series["error"], dtype=float)
     model_at_data = np.asarray(series["prewhitening_model_flux"], dtype=float)
     residual = flux - model_at_data
-    frequencies = [float(term["frequency"]) for term in result.get("prewhitening_terms", [])]
+    terms = result.get("prewhitening_terms", [])
+    frequencies = [float(term["frequency"]) for term in terms]
     dense_time = np.linspace(float(np.nanmin(time)), float(np.nanmax(time)), 2500)
     dense_model = None
-    if frequencies:
-        shifted = time - float(np.nanmin(time))
-        columns = [np.ones_like(time)]
-        for freq in frequencies:
-            phase = 2.0 * np.pi * freq * shifted
-            columns.extend([np.cos(phase), np.sin(phase)])
-        design = np.column_stack(columns)
-        safe_error = np.where(np.isfinite(error) & (error > 0.0), error, np.nan)
-        weights = np.where(np.isfinite(safe_error), 1.0 / safe_error**2, 1.0)
-        coeff, *_ = np.linalg.lstsq(design * np.sqrt(weights)[:, None], flux * np.sqrt(weights), rcond=None)
+    if frequencies and terms and "cos_coeff" in terms[0]:
+        offset = float(terms[0].get("offset", 0.0) or 0.0)
         dense_shifted = dense_time - float(np.nanmin(time))
-        dense_columns = [np.ones_like(dense_time)]
-        for freq in frequencies:
+        dense_model = np.full_like(dense_time, offset, dtype=float)
+        for term, freq in zip(terms, frequencies):
             phase = 2.0 * np.pi * freq * dense_shifted
-            dense_columns.extend([np.cos(phase), np.sin(phase)])
-        dense_model = np.column_stack(dense_columns) @ coeff
+            dense_model += float(term.get("cos_coeff", 0.0) or 0.0) * np.cos(phase)
+            dense_model += float(term.get("sin_coeff", 0.0) or 0.0) * np.sin(phase)
 
     fig = make_subplots(
         rows=2,
@@ -582,6 +577,7 @@ def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dic
         "fold_bins": str(st.session_state.get(f"{prefix}_fold_bins", 10)),
         "fold_fit_mode": st.session_state.get(f"{prefix}_fold_mode", "harmonics"),
         "fold_fit_harmonics": str(st.session_state.get(f"{prefix}_fold_harmonics", 1)),
+        "model_fit_method": st.session_state.get(f"{prefix}_model_fit_method", "standard"),
         "exclusion_tolerance": str(st.session_state.get(f"{prefix}_exclusion_tolerance", 0.015)),
         "advanced_method": st.session_state.get(f"{prefix}_advanced_method", "v1"),
         "advanced_fmin": str(st.session_state.get(f"{prefix}_advanced_fmin", st.session_state.get(f"{prefix}_fmin", 0.01))),
@@ -657,6 +653,22 @@ def input_controls(prefix: str, location=st) -> None:
     )
     option_cols[1].checkbox("Use error column", value=st.session_state.get(f"{prefix}_use_error", True), key=f"{prefix}_use_error")
     option_cols[2].checkbox("Flux is magnitude", value=st.session_state.get(f"{prefix}_flux_is_magnitude", False), key=f"{prefix}_flux_is_magnitude")
+    fit_options = ["standard", "robust", "display-optimized"]
+    current_fit_method = st.session_state.get(f"{prefix}_model_fit_method", "standard")
+    if current_fit_method not in fit_options:
+        current_fit_method = "standard"
+    fit_method = location.selectbox(
+        "Model fitting",
+        fit_options,
+        index=fit_options.index(current_fit_method),
+        key=f"{prefix}_model_fit_method",
+    )
+    fit_help = {
+        "standard": "Weighted least-squares fit using the provided errors.",
+        "robust": "Robust soft-L1 fit that downweights outliers and over-dominant points.",
+        "display-optimized": "Unweighted fit with free vertical offset for the displayed data.",
+    }
+    location.caption(fit_help[fit_method])
     location.caption("Analysis limits")
     limit_cols = location.columns(4)
     limit_cols[0].text_input("xmin", value=st.session_state.get(f"{prefix}_xmin", ""), key=f"{prefix}_xmin", placeholder="auto")
@@ -1008,8 +1020,14 @@ def render_search_outputs(result: dict | None) -> None:
         st.plotly_chart(folded_plot(result), use_container_width=True)
         st.caption("Folded periods")
         st.dataframe(folded_period_table(result), use_container_width=True, hide_index=True)
-        st.caption("Sinusoidal fit summary")
-        st.dataframe(folded_fit_summary(result), use_container_width=True, hide_index=True)
+        folded_terms = result.get("fold_fit_terms", [])
+        if folded_terms:
+            st.caption("Fit equation")
+            st.code(fit_equation_text(folded_terms, variable="phase"), language="text")
+            st.caption("Global fit summary")
+            st.dataframe(global_fit_summary(folded_terms), use_container_width=True, hide_index=True)
+            st.caption("Fit parameters")
+            st.dataframe(folded_fit_summary(result), use_container_width=True, hide_index=True)
     st.subheader("Detected peaks")
     st.dataframe(peaks_dataframe(result.get("peaks", [])), use_container_width=True, hide_index=True)
     dl_cols = st.columns(3)
@@ -1050,6 +1068,11 @@ def render_secondary_outputs(result: dict | None) -> None:
         with cols[1]:
             st.caption("Prewhitening steps")
             st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), use_container_width=True, hide_index=True)
+            if result.get("prewhitening_terms"):
+                st.caption("Prewhitening fit equation")
+                st.code(fit_equation_text(result.get("prewhitening_terms", []), variable="t_shifted"), language="text")
+                st.caption("Global prewhitening fit summary")
+                st.dataframe(global_fit_summary(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
             st.caption("Remaining LS peaks after prewhitening")
             st.dataframe(peaks_dataframe(result.get("residual_peaks", [])), use_container_width=True, hide_index=True)
     if st.session_state.get("app_show_model") and result.get("has_prewhitening"):

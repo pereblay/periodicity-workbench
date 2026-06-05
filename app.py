@@ -23,7 +23,7 @@ matplotlib.use(os.environ.get("MPLBACKEND", "Agg"))
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.timeseries import LombScargle
-from scipy.optimize import minimize_scalar
+from scipy.optimize import least_squares, minimize_scalar
 from scipy.signal import find_peaks
 
 
@@ -455,16 +455,67 @@ def add_bootstrap_errors(
         peak.period_p84 = float(np.percentile(boot_period, 84))
 
 
-def fit_sinusoids(t: np.ndarray, y: np.ndarray, dy: np.ndarray, frequencies: list[float]) -> tuple[np.ndarray, np.ndarray]:
-    shifted = t - t.min()
-    cols = [np.ones_like(t)]
+def normalize_fit_method(value: str | None) -> str:
+    cleaned = (value or "standard").strip().lower().replace(" ", "_").replace("-", "_")
+    if cleaned in {"standard", "weighted"}:
+        return "standard"
+    if cleaned in {"robust", "soft_l1", "huber"}:
+        return "robust"
+    if cleaned in {"display", "display_optimized", "display_optimised", "unweighted"}:
+        return "display_optimized"
+    raise ValueError("Model fitting must be standard, robust, or display-optimized")
+
+
+def sinusoid_design(x: np.ndarray, frequencies: list[float]) -> np.ndarray:
+    cols = [np.ones_like(x)]
     for freq in frequencies:
-        phase = 2.0 * np.pi * freq * shifted
+        phase = 2.0 * np.pi * freq * x
         cols.extend([np.cos(phase), np.sin(phase)])
-    design = np.column_stack(cols)
-    weights = 1.0 / dy**2
-    coeff, *_ = np.linalg.lstsq(design * np.sqrt(weights)[:, None], y * np.sqrt(weights), rcond=None)
-    return design @ coeff, coeff
+    return np.column_stack(cols)
+
+
+def safe_weights(dy: np.ndarray, method: str) -> np.ndarray:
+    if method == "display_optimized":
+        return np.ones_like(dy, dtype=float)
+    safe_dy = np.where(np.isfinite(dy) & (dy > 0.0), dy, np.nan)
+    return np.where(np.isfinite(safe_dy), 1.0 / safe_dy**2, 1.0)
+
+
+def fit_sinusoids(
+    x: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    frequencies: list[float],
+    method: str = "standard",
+) -> tuple[np.ndarray, np.ndarray, dict[str, float | str]]:
+    method = normalize_fit_method(method)
+    design = sinusoid_design(x, frequencies)
+    weights = safe_weights(dy, method)
+    sqrt_weights = np.sqrt(weights)
+    coeff, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], y * sqrt_weights, rcond=None)
+    if method == "robust":
+        scale = float(np.median(np.abs(y - design @ coeff)))
+        f_scale = max(scale, float(np.median(dy[np.isfinite(dy) & (dy > 0.0)])) if np.any(np.isfinite(dy) & (dy > 0.0)) else 1.0, 1e-12)
+        result = least_squares(
+            lambda params: (design @ params - y) * sqrt_weights,
+            coeff,
+            loss="soft_l1",
+            f_scale=f_scale,
+            max_nfev=2000,
+        )
+        coeff = result.x
+    model = design @ coeff
+    residuals = y - model
+    dof = max(1, len(y) - len(coeff))
+    summary: dict[str, float | str] = {
+        "method": method,
+        "offset": float(coeff[0]),
+        "rms": float(np.sqrt(np.mean(residuals**2))) if len(residuals) else None,
+        "weighted_rms": float(np.sqrt(np.average(residuals**2, weights=weights))) if len(residuals) else None,
+        "chi2_red": float(np.sum(weights * residuals**2) / dof) if len(residuals) else None,
+        "n_points": int(len(y)),
+    }
+    return model, coeff, summary
 
 
 def fit_sinusoids_with_terms(
@@ -472,16 +523,13 @@ def fit_sinusoids_with_terms(
     y: np.ndarray,
     dy: np.ndarray,
     terms: list[dict[str, float | str]],
+    method: str = "standard",
 ) -> tuple[np.ndarray, list[dict[str, float | str]]]:
     frequencies = [float(term["frequency"]) for term in terms]
-    model, coeff = fit_sinusoids(t, y, dy, frequencies)
     shifted = t - t.min()
-    cols = [np.ones_like(t)]
-    for freq in frequencies:
-        phase = 2.0 * np.pi * freq * shifted
-        cols.extend([np.cos(phase), np.sin(phase)])
-    design = np.column_stack(cols)
-    weights = 1.0 / dy**2
+    model, coeff, summary = fit_sinusoids(shifted, y, dy, frequencies, method=method)
+    design = sinusoid_design(shifted, frequencies)
+    weights = safe_weights(dy, normalize_fit_method(method))
     normal = design.T @ (design * weights[:, None])
     covariance = np.linalg.pinv(normal)
     rows: list[dict[str, float | str]] = []
@@ -500,14 +548,22 @@ def fit_sinusoids_with_terms(
         rows.append(
             {
                 "label": str(term["label"]),
+                "fit_method": summary["method"],
+                "offset": summary["offset"],
                 "main_period": term.get("main_period"),
                 "main_period_error": term.get("main_period_error"),
                 "period": float(1.0 / float(term["frequency"])),
                 "period_error": term.get("period_error"),
                 "frequency": float(term["frequency"]),
                 "frequency_error": term.get("frequency_error"),
+                "cos_coeff": cos_coeff,
+                "sin_coeff": sin_coeff,
                 "amplitude": amplitude,
                 "amplitude_error": amplitude_error,
+                "phase_of_max": float((np.arctan2(sin_coeff, cos_coeff) / (2.0 * np.pi)) % 1.0) if amplitude > 0 else None,
+                "rms": summary["rms"],
+                "weighted_rms": summary["weighted_rms"],
+                "chi2_red": summary["chi2_red"],
             }
         )
     return model, rows
@@ -586,6 +642,7 @@ def folded_profile(
     t0: float,
     n_bins: int,
     phase_frequency_ratios: list[float],
+    fit_method: str = "standard",
 ) -> dict:
     phase = ((t - t0) / period) % 1.0
     weights = 1.0 / dy**2
@@ -605,18 +662,10 @@ def folded_profile(
     errors = np.asarray(errors)
     counts = np.asarray(counts)
 
-    cols = [np.ones_like(centers)]
-    for ratio in phase_frequency_ratios:
-        cols.extend([np.cos(2.0 * np.pi * ratio * centers), np.sin(2.0 * np.pi * ratio * centers)])
-    design = np.column_stack(cols)
-    wbin = 1.0 / errors**2
-    coeff, *_ = np.linalg.lstsq(design * np.sqrt(wbin)[:, None], means * np.sqrt(wbin), rcond=None)
+    _, coeff, fit_summary = fit_sinusoids(centers, means, errors, phase_frequency_ratios, method=fit_method)
 
     def model(ph: np.ndarray) -> np.ndarray:
-        cols_model = [np.ones_like(ph)]
-        for ratio in phase_frequency_ratios:
-            cols_model.extend([np.cos(2.0 * np.pi * ratio * ph), np.sin(2.0 * np.pi * ratio * ph)])
-        return np.column_stack(cols_model) @ coeff
+        return sinusoid_design(ph, phase_frequency_ratios) @ coeff
 
     grid = np.linspace(0.0, 1.0, 50001, endpoint=False)
     values = model(grid)
@@ -630,6 +679,29 @@ def folded_profile(
         if all(abs(ph - old[0]) > 1e-4 for old in maxima):
             maxima.append((ph, val))
     maxima.sort(key=lambda x: x[0])
+    terms = []
+    for idx, ratio in enumerate(phase_frequency_ratios):
+        cos_idx = 1 + 2 * idx
+        sin_idx = cos_idx + 1
+        cos_coeff = float(coeff[cos_idx])
+        sin_coeff = float(coeff[sin_idx])
+        amplitude = float(np.hypot(cos_coeff, sin_coeff))
+        phase_of_max = float((np.arctan2(sin_coeff, cos_coeff) / (2.0 * np.pi * ratio)) % (1.0 / ratio)) if amplitude > 0 and ratio != 0 else None
+        terms.append(
+            {
+                "component": idx + 1,
+                "fit_method": fit_summary["method"],
+                "offset": fit_summary["offset"],
+                "frequency_ratio": float(ratio),
+                "cos_coeff": cos_coeff,
+                "sin_coeff": sin_coeff,
+                "amplitude": amplitude,
+                "phase_of_max": phase_of_max,
+                "rms": fit_summary["rms"],
+                "weighted_rms": fit_summary["weighted_rms"],
+                "chi2_red": fit_summary["chi2_red"],
+            }
+        )
     return {
         "phase": centers,
         "flux": means,
@@ -639,6 +711,8 @@ def folded_profile(
         "model_flux": model(np.linspace(0.0, 2.0, 1000) % 1.0),
         "maxima": maxima,
         "phase_frequency_ratios": phase_frequency_ratios,
+        "fit_summary": fit_summary,
+        "fit_terms": terms,
     }
 
 
@@ -767,6 +841,8 @@ def empty_folded_payload() -> dict:
         "model_phase": np.asarray([], dtype=float),
         "model_flux": np.asarray([], dtype=float),
         "maxima": [],
+        "fit_summary": {},
+        "fit_terms": [],
     }
 
 
@@ -795,8 +871,9 @@ def empty_analysis_result(
     if fields is not None:
         try:
             fold_bins = int(fields.get("fold_bins", "10"))
+            fit_method = normalize_fit_method(fields.get("model_fit_method", "standard"))
             folded_period, fit_ratios, fit_periods = folded_configuration(None, fields)
-            folded = folded_profile(t, y, dy, folded_period, float(t0 if t0 is not None else t[0]), fold_bins, fit_ratios)
+            folded = folded_profile(t, y, dy, folded_period, float(t0 if t0 is not None else t[0]), fold_bins, fit_ratios, fit_method)
         except ValueError:
             folded = empty_folded_payload()
     return {
@@ -820,6 +897,8 @@ def empty_analysis_result(
         "folded_maxima": [{"phase": ph, "flux": val} for ph, val in folded["maxima"]],
         "fold_fit_periods": fit_periods,
         "fold_fit_ratios": fit_ratios,
+        "fold_fit_terms": folded.get("fit_terms", []),
+        "fold_fit_summary": folded.get("fit_summary", {}),
         "series": {
             "period": period.tolist(),
             "frequency": freq.tolist(),
@@ -864,6 +943,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     bootstrap_width = float(fields.get("bootstrap_width", "0.03"))
     fold_bins = int(fields.get("fold_bins", "10"))
     labels = unit_labels(fields.get("time_unit", "days"))
+    fit_method = normalize_fit_method(fields.get("model_fit_method", "standard"))
     flux_is_magnitude = str(fields.get("flux_is_magnitude", "")).strip().lower() in {"1", "true", "yes", "on"}
     t, y, dy = read_columns(file_bytes, filename, time_col, flux_col, error_col)
     t, y, dy = apply_data_limits(t, y, dy, fields)
@@ -934,7 +1014,9 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     prewhiten_base_periods = prewhiten_periods
     prewhiten_terms = prewhitening_terms_from_periods(prewhiten_base_periods, peaks) if prewhiten_base_periods else []
     if prewhiten_terms:
-        prewhiten_model, prewhitening_table = fit_sinusoids_with_terms(t, y_analysis, dy, prewhiten_terms)
+        prewhiten_model, prewhitening_table = fit_sinusoids_with_terms(t, y_analysis, dy, prewhiten_terms, method=fit_method)
+        for row in prewhitening_table:
+            row["offset"] = float(row.get("offset", 0.0)) + y_offset
         residuals = y_analysis - prewhiten_model
         residual_power, residual_ls, residual_peaks = find_lomb_scargle_peaks(
             t, residuals, dy, freq, max_peaks, min_considered_period=min_considered_period
@@ -979,7 +1061,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         residual_peaks = []
 
     folded_period, fit_ratios, fit_periods = folded_configuration(primary.period, fields)
-    folded = folded_profile(t, y, dy, folded_period, t0, fold_bins, fit_ratios)
+    folded = folded_profile(t, y, dy, folded_period, t0, fold_bins, fit_ratios, fit_method)
     period = 1.0 / freq
     return {
         "n_points": len(t),
@@ -1001,6 +1083,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "folded_maxima": [{"phase": ph, "flux": val} for ph, val in folded["maxima"]],
         "fold_fit_periods": fit_periods,
         "fold_fit_ratios": fit_ratios,
+        "fold_fit_terms": folded.get("fit_terms", []),
+        "fold_fit_summary": folded.get("fit_summary", {}),
         "series": {
             "period": period.tolist(),
             "frequency": freq.tolist(),
@@ -1035,9 +1119,10 @@ def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
     dy = np.asarray(series["error"], dtype=float)
     t0_raw = fields.get("t0", "").strip()
     t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
+    fit_method = normalize_fit_method(fields.get("model_fit_method", "standard"))
 
     folded_period, fit_ratios, fit_periods = folded_configuration(primary_period, fields)
-    folded = folded_profile(t, y, dy, folded_period, t0, fold_bins, fit_ratios)
+    folded = folded_profile(t, y, dy, folded_period, t0, fold_bins, fit_ratios, fit_method)
 
     updated = dict(result)
     updated_series = dict(series)
@@ -1056,6 +1141,8 @@ def update_folded_profile(result: dict, fields: dict[str, str]) -> dict:
     updated["folded_maxima"] = [{"phase": ph, "flux": val} for ph, val in folded["maxima"]]
     updated["fold_fit_periods"] = fit_periods
     updated["fold_fit_ratios"] = fit_ratios
+    updated["fold_fit_terms"] = folded.get("fit_terms", [])
+    updated["fold_fit_summary"] = folded.get("fit_summary", {})
     if "plots" in updated:
         updated_plots = dict(updated["plots"])
         updated_plots["folded"] = make_folded_plot(folded)
