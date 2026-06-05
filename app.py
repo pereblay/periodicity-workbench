@@ -1229,6 +1229,225 @@ def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
     }
 
 
+def bondi_hoyle_proxy(
+    phase: np.ndarray,
+    eccentricity: float,
+    wind_speed_ratio: float,
+    wind_beta: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    eccentricity = float(np.clip(eccentricity, 0.0, 0.9))
+    wind_speed_ratio = max(float(wind_speed_ratio), 0.05)
+    wind_beta = max(float(wind_beta), 0.0)
+    true_anomaly = true_anomaly_from_phase(phase, eccentricity)
+    separation = (1.0 - eccentricity**2) / (1.0 + eccentricity * np.cos(true_anomaly))
+    separation = np.maximum(separation, 1e-4)
+    orbital_speed2 = np.maximum(2.0 / separation - 1.0, 1e-4)
+    wind_speed = wind_speed_ratio * np.maximum(1.0 - 0.15 / separation, 0.05) ** wind_beta
+    relative_speed2 = wind_speed**2 + orbital_speed2
+    density = 1.0 / (separation**2 * np.maximum(wind_speed, 1e-4))
+    proxy = density / np.maximum(relative_speed2, 1e-8) ** 1.5
+    proxy = proxy / np.nanmedian(proxy) - 1.0
+    return proxy, separation, true_anomaly
+
+
+def fit_bondi_hoyle_model(
+    phase: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    fit_eccentricity: bool,
+    eccentricity_guess: float,
+    fit_wind_speed: bool,
+    wind_speed_guess: float,
+    wind_beta: float,
+    include_phase_lag: bool,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float | str]]:
+    weights = safe_weights(dy, "standard")
+    sqrt_weights = np.sqrt(weights)
+    eccentricity_guess = float(np.clip(eccentricity_guess, 0.0, 0.9))
+    wind_speed_guess = max(float(wind_speed_guess), 0.05)
+    phase_lag_guess = 0.0
+
+    variable0 = []
+    lower, upper = [], []
+    if fit_eccentricity:
+        variable0.append(eccentricity_guess)
+        lower.append(0.0)
+        upper.append(0.9)
+    if fit_wind_speed:
+        variable0.append(wind_speed_guess)
+        lower.append(0.05)
+        upper.append(20.0)
+    if include_phase_lag:
+        variable0.append(phase_lag_guess)
+        lower.append(-0.25)
+        upper.append(0.25)
+
+    def unpack(variable_params: np.ndarray) -> tuple[float, float, float]:
+        idx = 0
+        eccentricity = eccentricity_guess
+        wind_speed_ratio = wind_speed_guess
+        phase_lag = 0.0
+        if fit_eccentricity:
+            eccentricity = float(variable_params[idx])
+            idx += 1
+        if fit_wind_speed:
+            wind_speed_ratio = float(variable_params[idx])
+            idx += 1
+        if include_phase_lag:
+            phase_lag = float(variable_params[idx])
+        return eccentricity, wind_speed_ratio, phase_lag
+
+    def linear_model_for(variable_params: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float, float]:
+        eccentricity, wind_speed_ratio, phase_lag = unpack(variable_params)
+        shifted_phase = (phase - phase_lag) % 1.0
+        proxy, _, _ = bondi_hoyle_proxy(shifted_phase, eccentricity, wind_speed_ratio, wind_beta)
+        design = np.column_stack([np.ones_like(proxy), proxy])
+        coeff, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], y * sqrt_weights, rcond=None)
+        return design @ coeff, coeff, eccentricity, wind_speed_ratio, phase_lag
+
+    if variable0:
+        optimized = least_squares(
+            lambda variable_params: (linear_model_for(variable_params)[0] - y) * sqrt_weights,
+            np.asarray(variable0, dtype=float),
+            bounds=(np.asarray(lower, dtype=float), np.asarray(upper, dtype=float)),
+            loss="soft_l1",
+            max_nfev=3000,
+        )
+        variables = optimized.x
+    else:
+        variables = np.asarray([], dtype=float)
+    model, coeff, eccentricity, wind_speed_ratio, phase_lag = linear_model_for(variables)
+    residuals = y - model
+    dof = max(1, len(y) - (2 + len(variables)))
+    summary: dict[str, float | str] = {
+        "method": "bondi_hoyle_toy",
+        "offset": float(coeff[0]),
+        "scale": float(coeff[1]),
+        "eccentricity": eccentricity,
+        "wind_speed_ratio": wind_speed_ratio,
+        "wind_beta": wind_beta,
+        "phase_lag": phase_lag,
+        "rms": float(np.sqrt(np.mean(residuals**2))) if len(residuals) else None,
+        "weighted_rms": float(np.sqrt(np.average(residuals**2, weights=weights))) if len(residuals) else None,
+        "chi2_red": float(np.sum(weights * residuals**2) / dof) if len(residuals) else None,
+        "n_points": int(len(y)),
+    }
+    return model, coeff, summary
+
+
+def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
+    series = result.get("series", {})
+    t = np.asarray(series.get("time", []), dtype=float)
+    y = np.asarray(series.get("flux", []), dtype=float)
+    dy = np.asarray(series.get("error", []), dtype=float)
+    if len(t) < 8 or len(y) != len(t):
+        raise ValueError("Bondi-Hoyle model lab requires a completed analysis with at least 8 data points")
+    if len(dy) != len(t):
+        dy = np.ones_like(y)
+
+    period_raw = str(fields.get("model_lab_bh_period", fields.get("model_lab_period", ""))).strip()
+    default_period = result.get("folded_period") or result.get("primary_period")
+    if period_raw:
+        period = float(period_raw)
+    elif default_period is not None:
+        period = float(default_period)
+    else:
+        raise ValueError("Choose a Bondi-Hoyle orbital period or run an analysis with a primary period")
+    if not np.isfinite(period) or period <= 0.0:
+        raise ValueError("Bondi-Hoyle period must be positive")
+    t0_raw = str(fields.get("model_lab_bh_t0", fields.get("model_lab_t0", ""))).strip()
+    t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
+    n_bins = max(4, int(fields.get("model_lab_bh_bins", fields.get("fold_bins", "24"))))
+    eccentricity_guess = float(fields.get("model_lab_bh_eccentricity", "0.3"))
+    wind_speed_guess = float(fields.get("model_lab_bh_wind_speed_ratio", "3.0"))
+    wind_beta = float(fields.get("model_lab_bh_wind_beta", "0.8"))
+    fit_eccentricity = str(fields.get("model_lab_bh_fit_eccentricity", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    fit_wind_speed = str(fields.get("model_lab_bh_fit_wind_speed", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    include_phase_lag = str(fields.get("model_lab_bh_phase_lag", "true")).strip().lower() in {"1", "true", "yes", "on"}
+
+    phase = ((t - t0) / period) % 1.0
+    centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
+    model_at_data, coeff, summary = fit_bondi_hoyle_model(
+        phase,
+        y,
+        dy,
+        fit_eccentricity,
+        eccentricity_guess,
+        fit_wind_speed,
+        wind_speed_guess,
+        wind_beta,
+        include_phase_lag,
+    )
+    residuals = y - model_at_data
+    n_parameters = 2 + int(fit_eccentricity) + int(fit_wind_speed) + int(include_phase_lag)
+    aic, bic = information_criteria(residuals, n_parameters)
+    model_phase = np.linspace(0.0, 2.0, 1600)
+    phase_lag = float(summary["phase_lag"])
+    proxy_phase, separation_phase, true_anomaly_phase = bondi_hoyle_proxy(
+        (model_phase % 1.0 - phase_lag) % 1.0,
+        float(summary["eccentricity"]),
+        float(summary["wind_speed_ratio"]),
+        wind_beta,
+    )
+    model_flux = float(coeff[0]) + float(coeff[1]) * proxy_phase
+    model_time = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), 2500)
+    model_time_phase = ((model_time - t0) / period) % 1.0
+    proxy_time, _, _ = bondi_hoyle_proxy(
+        (model_time_phase - phase_lag) % 1.0,
+        float(summary["eccentricity"]),
+        float(summary["wind_speed_ratio"]),
+        wind_beta,
+    )
+    model_time_flux = float(coeff[0]) + float(coeff[1]) * proxy_time
+    extrema = sampled_curve_extrema(model_phase, model_flux, "BHL accretion maximum")
+    if len(extrema) == 0 and len(model_flux):
+        idx = int(np.nanargmax(model_flux))
+        extrema = [{"phase": float(model_phase[idx] % 1.0), "flux": float(model_flux[idx]), "kind": "BHL accretion maximum"}]
+
+    summary = {
+        **summary,
+        "period": period,
+        "T0": t0,
+        "AIC": aic,
+        "BIC": bic,
+        "n_parameters": n_parameters,
+    }
+    parameters = [
+        {"parameter": "offset", "value": float(coeff[0])},
+        {"parameter": "bhl_scale", "value": float(coeff[1])},
+        {"parameter": "eccentricity", "value": float(summary["eccentricity"])},
+        {"parameter": "wind_speed_ratio_vwind_vorb", "value": float(summary["wind_speed_ratio"])},
+        {"parameter": "wind_beta", "value": wind_beta},
+        {"parameter": "phase_lag", "value": phase_lag},
+    ]
+    return {
+        "family": "bondi_hoyle",
+        "period": period,
+        "t0": t0,
+        "bins": n_bins,
+        "phase": centers.tolist(),
+        "flux": means.tolist(),
+        "error": errors.tolist(),
+        "counts": counts.tolist(),
+        "data_phase": phase.tolist(),
+        "data_time": t.tolist(),
+        "data_flux": y.tolist(),
+        "data_error": dy.tolist(),
+        "model_at_data": model_at_data.tolist(),
+        "model_phase": model_phase.tolist(),
+        "model_flux": model_flux.tolist(),
+        "model_time": model_time.tolist(),
+        "model_time_flux": model_time_flux.tolist(),
+        "proxy_phase": proxy_phase.tolist(),
+        "separation_phase": separation_phase.tolist(),
+        "true_anomaly_phase": true_anomaly_phase.tolist(),
+        "extrema": extrema,
+        "parameters": parameters,
+        "summary": summary,
+        "formula": "y(t) = C + A * [rho(r) / v_rel^3], rho ~ 1/(r^2 v_w), v_rel^2 ~ v_w^2 + v_orb^2; toy wind-fed accretion model",
+    }
+
+
 def parse_period_list(text: str) -> list[float]:
     periods: list[float] = []
     for item in re.split(r"[,;\\s]+", text.strip()):
