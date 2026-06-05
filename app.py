@@ -1027,7 +1027,14 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     prewhiten_base_periods = prewhiten_periods
     prewhiten_terms = prewhitening_terms_from_periods(prewhiten_base_periods, peaks) if prewhiten_base_periods else []
     if prewhiten_terms:
-        prewhiten_model, prewhitening_table = fit_sinusoids_with_terms(t, y_analysis, dy, prewhiten_terms, method=fit_method)
+        prewhitening_fit_method = "standard" if fit_method == "display_optimized" else fit_method
+        prewhiten_model, prewhitening_table = fit_sinusoids_with_terms(
+            t,
+            y_analysis,
+            dy,
+            prewhiten_terms,
+            method=prewhitening_fit_method,
+        )
         for row in prewhitening_table:
             row["offset"] = float(row.get("offset", 0.0)) + y_offset
         residuals = y_analysis - prewhiten_model
