@@ -481,6 +481,14 @@ def safe_weights(dy: np.ndarray, method: str) -> np.ndarray:
     return np.where(np.isfinite(safe_dy), 1.0 / safe_dy**2, 1.0)
 
 
+def display_range_percentiles(n_points: int) -> tuple[float, float]:
+    if n_points >= 50:
+        return 1.0, 99.0
+    if n_points >= 20:
+        return 2.5, 97.5
+    return 0.0, 100.0
+
+
 def fit_sinusoids(
     x: np.ndarray,
     y: np.ndarray,
@@ -493,6 +501,8 @@ def fit_sinusoids(
     weights = safe_weights(dy, method)
     sqrt_weights = np.sqrt(weights)
     coeff, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], y * sqrt_weights, rcond=None)
+    display_low_percentile = None
+    display_high_percentile = None
     if method == "robust":
         scale = float(np.median(np.abs(y - design @ coeff)))
         f_scale = max(scale, float(np.median(dy[np.isfinite(dy) & (dy > 0.0)])) if np.any(np.isfinite(dy) & (dy > 0.0)) else 1.0, 1e-12)
@@ -506,8 +516,9 @@ def fit_sinusoids(
         coeff = result.x
     elif method == "display_optimized" and len(y) >= 4:
         model_initial = design @ coeff
-        data_low, data_high = np.nanpercentile(y, [5, 95])
-        model_low, model_high = np.nanpercentile(model_initial, [5, 95])
+        display_low_percentile, display_high_percentile = display_range_percentiles(len(y))
+        data_low, data_high = np.nanpercentile(y, [display_low_percentile, display_high_percentile])
+        model_low, model_high = np.nanpercentile(model_initial, [display_low_percentile, display_high_percentile])
         data_span = float(data_high - data_low)
         model_span = float(model_high - model_low)
         if np.isfinite(data_span) and np.isfinite(model_span) and data_span > 0.0 and model_span > 0.0:
@@ -527,6 +538,8 @@ def fit_sinusoids(
         "weighted_rms": float(np.sqrt(np.average(residuals**2, weights=weights))) if len(residuals) else None,
         "chi2_red": float(np.sum(weights * residuals**2) / dof) if len(residuals) else None,
         "n_points": int(len(y)),
+        "display_low_percentile": display_low_percentile,
+        "display_high_percentile": display_high_percentile,
     }
     return model, coeff, summary
 
