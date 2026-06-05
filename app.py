@@ -1448,6 +1448,321 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
     }
 
 
+def epoch_folding_statistic(
+    t: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    periods: np.ndarray,
+    n_bins: int,
+    t0: float,
+) -> np.ndarray:
+    weights = safe_weights(dy, "standard")
+    global_mean = float(np.average(y, weights=weights))
+    stats = np.full_like(periods, np.nan, dtype=float)
+    for idx, period in enumerate(periods):
+        phase = ((t - t0) / period) % 1.0
+        centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
+        good = np.isfinite(means) & np.isfinite(errors) & (errors > 0.0) & (counts > 0)
+        if good.sum() < 3:
+            continue
+        stats[idx] = float(np.sum(((means[good] - global_mean) / errors[good]) ** 2))
+    return stats
+
+
+def interp_periodic_template(phase: np.ndarray, template_phase: np.ndarray, template_flux: np.ndarray) -> np.ndarray:
+    template_phase = np.asarray(template_phase, dtype=float) % 1.0
+    template_flux = np.asarray(template_flux, dtype=float)
+    order = np.argsort(template_phase)
+    ph = template_phase[order]
+    fl = template_flux[order]
+    ph_ext = np.concatenate([ph - 1.0, ph, ph + 1.0])
+    fl_ext = np.concatenate([fl, fl, fl])
+    return np.interp(phase % 1.0, ph_ext, fl_ext)
+
+
+def estimate_pulse_arrivals(
+    t: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    period: float,
+    t0: float,
+    coeff: np.ndarray,
+    harmonic_ratios: list[float],
+    n_segments: int,
+    min_points: int,
+) -> tuple[list[dict[str, float | int]], np.ndarray, np.ndarray]:
+    n_segments = max(2, int(n_segments))
+    min_points = max(4, int(min_points))
+    edges = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), n_segments + 1)
+    template_phase = np.linspace(0.0, 1.0, 1500, endpoint=False)
+    template_flux = sinusoid_design(template_phase, harmonic_ratios) @ coeff
+    template_flux = template_flux - float(np.nanmean(template_flux))
+    rows: list[dict[str, float | int]] = []
+    raw_shifts: list[float] = []
+    centers_for_unwrap: list[float] = []
+
+    for seg_idx, (low, high) in enumerate(zip(edges[:-1], edges[1:]), start=1):
+        if seg_idx == n_segments:
+            mask = (t >= low) & (t <= high)
+        else:
+            mask = (t >= low) & (t < high)
+        if int(mask.sum()) < min_points:
+            continue
+        seg_t = t[mask]
+        seg_y = y[mask]
+        seg_dy = dy[mask]
+        phase = ((seg_t - t0) / period) % 1.0
+        weights = safe_weights(seg_dy, "standard")
+        sqrt_weights = np.sqrt(weights)
+
+        def shifted_score(shift: float) -> float:
+            template = interp_periodic_template((phase - shift) % 1.0, template_phase, template_flux)
+            design = np.column_stack([np.ones_like(template), template])
+            coeff_seg, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], seg_y * sqrt_weights, rcond=None)
+            residual = seg_y - design @ coeff_seg
+            return float(np.sum(weights * residual**2))
+
+        coarse = np.linspace(-0.5, 0.5, 361)
+        scores = np.asarray([shifted_score(value) for value in coarse], dtype=float)
+        best_idx = int(np.nanargmin(scores))
+        step = float(coarse[1] - coarse[0])
+        left = max(-0.5, float(coarse[best_idx] - 2.5 * step))
+        right = min(0.5, float(coarse[best_idx] + 2.5 * step))
+        refined = minimize_scalar(shifted_score, bounds=(left, right), method="bounded")
+        shift = float(refined.x)
+        chi2 = float(refined.fun)
+        dense = np.linspace(max(-0.5, shift - 0.08), min(0.5, shift + 0.08), 321)
+        dense_scores = np.asarray([shifted_score(value) for value in dense], dtype=float)
+        inside = dense[dense_scores <= chi2 + 1.0]
+        if len(inside) >= 2:
+            shift_error = 0.5 * float(inside.max() - inside.min())
+        else:
+            shift_error = float("nan")
+        center = 0.5 * float(low + high)
+        raw_shifts.append(shift)
+        centers_for_unwrap.append(center)
+        rows.append(
+            {
+                "segment": seg_idx,
+                "time": center,
+                "time_start": float(low),
+                "time_end": float(high),
+                "n_points": int(mask.sum()),
+                "phase_shift": shift,
+                "phase_shift_error": shift_error if np.isfinite(shift_error) else None,
+                "arrival_time": center + shift * period,
+                "arrival_time_error": shift_error * period if np.isfinite(shift_error) else None,
+                "chi2": chi2,
+            }
+        )
+
+    if not rows:
+        return rows, template_phase, template_flux
+
+    unwrapped = np.unwrap(2.0 * np.pi * np.asarray(raw_shifts, dtype=float)) / (2.0 * np.pi)
+    reference_shift = float(np.nanmedian(unwrapped))
+    for row, unwrapped_shift in zip(rows, unwrapped):
+        row["phase_shift_unwrapped"] = float(unwrapped_shift)
+        row["oc_time"] = float((unwrapped_shift - reference_shift) * period)
+    return rows, template_phase, template_flux
+
+
+def fit_oc_sinusoid(
+    arrivals: list[dict[str, float | int]],
+    orbital_period: float | None,
+    t_ref: float,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, float | str]], dict[str, float | str], str] | None:
+    if orbital_period is None or not np.isfinite(orbital_period) or orbital_period <= 0.0 or len(arrivals) < 4:
+        return None
+    time = np.asarray([float(row["time"]) for row in arrivals], dtype=float)
+    oc = np.asarray([float(row["oc_time"]) for row in arrivals], dtype=float)
+    err = np.asarray([
+        float(row["arrival_time_error"]) if row.get("arrival_time_error") is not None else np.nan
+        for row in arrivals
+    ], dtype=float)
+    if not np.any(np.isfinite(err) & (err > 0.0)):
+        err = np.ones_like(oc)
+    else:
+        fallback = float(np.nanmedian(err[np.isfinite(err) & (err > 0.0)]))
+        err = np.where(np.isfinite(err) & (err > 0.0), err, fallback)
+    frequency = 1.0 / orbital_period
+    model_at_arrivals, coeff, summary = fit_sinusoids(time - t_ref, oc, err, [frequency], method="standard")
+    model_time = np.linspace(float(np.nanmin(time)), float(np.nanmax(time)), 1000)
+    model_oc = sinusoid_design(model_time - t_ref, [frequency]) @ coeff
+    amplitude = float(np.hypot(coeff[1], coeff[2]))
+    phase_of_max = float((np.arctan2(coeff[2], coeff[1]) / (2.0 * np.pi)) % 1.0)
+    parameters = [
+        {"parameter": "oc_offset", "value": float(coeff[0])},
+        {"parameter": "oc_cos_coeff", "value": float(coeff[1])},
+        {"parameter": "oc_sin_coeff", "value": float(coeff[2])},
+        {"parameter": "oc_amplitude_time", "value": amplitude},
+        {"parameter": "projected_a_sini_proxy", "value": amplitude},
+        {"parameter": "orbital_phase_of_max_delay", "value": phase_of_max},
+        {"parameter": "orbital_period", "value": orbital_period},
+    ]
+    residuals = oc - model_at_arrivals
+    aic, bic = information_criteria(residuals, len(coeff))
+    summary = {
+        **summary,
+        "orbital_period": orbital_period,
+        "oc_amplitude_time": amplitude,
+        "phase_of_max_delay": phase_of_max,
+        "AIC": aic,
+        "BIC": bic,
+    }
+    formula = "O-C(t) = C + A_c cos(2 pi (t-Tref)/P_orb) + A_s sin(2 pi (t-Tref)/P_orb)"
+    return model_time, model_oc, parameters, summary, formula
+
+
+def pulse_period_model_lab(result: dict, fields: dict[str, str]) -> dict:
+    series = result.get("series", {})
+    t = np.asarray(series.get("time", []), dtype=float)
+    y = np.asarray(series.get("flux", []), dtype=float)
+    dy = np.asarray(series.get("error", []), dtype=float)
+    if len(t) < 12 or len(y) != len(t):
+        raise ValueError("Pulse period analysis requires a completed analysis with at least 12 data points")
+    if len(dy) != len(t):
+        dy = np.ones_like(y)
+
+    period_raw = str(fields.get("model_lab_pulse_period", fields.get("model_lab_period", ""))).strip()
+    default_period = result.get("folded_period") or result.get("primary_period")
+    if period_raw:
+        period_guess = float(period_raw)
+    elif default_period is not None:
+        period_guess = float(default_period)
+    else:
+        raise ValueError("Choose a pulse period or run an analysis with a primary period")
+    if not np.isfinite(period_guess) or period_guess <= 0.0:
+        raise ValueError("Pulse period must be positive")
+    t0_raw = str(fields.get("model_lab_pulse_t0", fields.get("model_lab_t0", ""))).strip()
+    t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
+    n_bins = max(4, int(fields.get("model_lab_pulse_bins", fields.get("fold_bins", "24"))))
+    epoch_bins = max(4, int(fields.get("model_lab_pulse_epoch_bins", str(n_bins))))
+    n_trials = max(30, int(fields.get("model_lab_pulse_trials", "300")))
+    search_width = max(0.0, float(fields.get("model_lab_pulse_search_width", "2.0"))) / 100.0
+    n_harmonics = max(1, min(20, int(fields.get("model_lab_pulse_harmonics", "3"))))
+    n_segments = max(2, int(fields.get("model_lab_pulse_segments", "8")))
+    min_points = max(4, int(fields.get("model_lab_pulse_min_points", "20")))
+    fit_method = normalize_fit_method(fields.get("model_lab_pulse_fit_method", fields.get("model_fit_method", "standard")))
+    orbital_period = optional_float(fields.get("model_lab_pulse_orbital_period"))
+
+    if search_width > 0.0:
+        low = max(period_guess * (1.0 - search_width), np.finfo(float).eps)
+        high = period_guess * (1.0 + search_width)
+        trial_periods = np.linspace(low, high, n_trials)
+    else:
+        trial_periods = np.asarray([period_guess], dtype=float)
+    epoch_power = epoch_folding_statistic(t, y, dy, trial_periods, epoch_bins, t0)
+    best_idx = int(np.nanargmax(epoch_power)) if np.any(np.isfinite(epoch_power)) else 0
+    best_period = float(trial_periods[best_idx])
+    best_epoch_power = float(epoch_power[best_idx]) if np.isfinite(epoch_power[best_idx]) else None
+
+    phase = ((t - t0) / best_period) % 1.0
+    centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
+    harmonic_ratios = [float(order) for order in range(1, n_harmonics + 1)]
+    model_at_data, coeff, summary = fit_sinusoids(phase, y, dy, harmonic_ratios, method=fit_method)
+    residuals = y - model_at_data
+    aic, bic = information_criteria(residuals, len(coeff))
+    model_phase = np.linspace(0.0, 2.0, 1600)
+    model_flux = sinusoid_design(model_phase % 1.0, harmonic_ratios) @ coeff
+    model_time = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), 2500)
+    model_time_phase = ((model_time - t0) / best_period) % 1.0
+    model_time_flux = sinusoid_design(model_time_phase, harmonic_ratios) @ coeff
+    maxima = periodic_model_maxima(harmonic_ratios, coeff)
+    profile_min = float(np.nanmin(model_flux))
+    profile_max = float(np.nanmax(model_flux))
+    profile_mean = float(coeff[0])
+    peak_to_peak_pf = float((profile_max - profile_min) / (profile_max + profile_min)) if abs(profile_max + profile_min) > 1e-12 else None
+    rms_pf = float(
+        np.sqrt(np.sum([coeff[1 + 2 * idx] ** 2 + coeff[2 + 2 * idx] ** 2 for idx in range(n_harmonics)]) / 2.0) / abs(profile_mean)
+    ) if abs(profile_mean) > 1e-12 else None
+    arrivals, template_phase, template_flux = estimate_pulse_arrivals(
+        t,
+        y,
+        dy,
+        best_period,
+        t0,
+        coeff,
+        harmonic_ratios,
+        n_segments,
+        min_points,
+    )
+    oc_fit = fit_oc_sinusoid(arrivals, orbital_period, t0)
+    if oc_fit is None:
+        oc_model_time = np.asarray([], dtype=float)
+        oc_model = np.asarray([], dtype=float)
+        oc_parameters: list[dict[str, float | str]] = []
+        oc_summary: dict[str, float | str] = {}
+        oc_formula = ""
+    else:
+        oc_model_time, oc_model, oc_parameters, oc_summary, oc_formula = oc_fit
+
+    terms = []
+    for idx, ratio in enumerate(harmonic_ratios):
+        cos_idx = 1 + 2 * idx
+        sin_idx = cos_idx + 1
+        cos_coeff = float(coeff[cos_idx])
+        sin_coeff = float(coeff[sin_idx])
+        terms.append(
+            {
+                "component": idx + 1,
+                "frequency_ratio": ratio,
+                "period": best_period / ratio,
+                "cos_coeff": cos_coeff,
+                "sin_coeff": float(coeff[sin_idx]),
+                "amplitude": float(np.hypot(cos_coeff, sin_coeff)),
+                "phase_of_max": float((np.arctan2(coeff[sin_idx], coeff[cos_idx]) / (2.0 * np.pi * ratio)) % (1.0 / ratio)),
+            }
+        )
+    summary = {
+        **summary,
+        "period_guess": period_guess,
+        "best_period": best_period,
+        "T0": t0,
+        "epoch_folding_statistic": best_epoch_power,
+        "peak_to_peak_pulsed_fraction": peak_to_peak_pf,
+        "rms_pulsed_fraction": rms_pf,
+        "AIC": aic,
+        "BIC": bic,
+        "n_parameters": len(coeff),
+        "n_arrivals": len(arrivals),
+    }
+    return {
+        "family": "pulse",
+        "period": best_period,
+        "period_guess": period_guess,
+        "t0": t0,
+        "bins": n_bins,
+        "phase": centers.tolist(),
+        "flux": means.tolist(),
+        "error": errors.tolist(),
+        "counts": counts.tolist(),
+        "data_phase": phase.tolist(),
+        "data_time": t.tolist(),
+        "data_flux": y.tolist(),
+        "data_error": dy.tolist(),
+        "model_at_data": model_at_data.tolist(),
+        "model_phase": model_phase.tolist(),
+        "model_flux": model_flux.tolist(),
+        "model_time": model_time.tolist(),
+        "model_time_flux": model_time_flux.tolist(),
+        "maxima": [{"phase": ph, "flux": val} for ph, val in maxima],
+        "terms": terms,
+        "summary": summary,
+        "trial_period": trial_periods.tolist(),
+        "epoch_power": epoch_power.tolist(),
+        "template_phase": template_phase.tolist(),
+        "template_flux": template_flux.tolist(),
+        "arrivals": arrivals,
+        "oc_model_time": oc_model_time.tolist(),
+        "oc_model": oc_model.tolist(),
+        "oc_parameters": oc_parameters,
+        "oc_summary": oc_summary,
+        "formula": "y(phi) = C + sum_k [a_k cos(2 pi k phi) + b_k sin(2 pi k phi)]",
+        "oc_formula": oc_formula,
+    }
+
+
 def parse_period_list(text: str) -> list[float]:
     periods: list[float] = []
     for item in re.split(r"[,;\\s]+", text.strip()):

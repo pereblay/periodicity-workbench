@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from app import advanced_time_frequency_map, binary_model_lab, bondi_hoyle_model_lab, fourier_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
+from app import advanced_time_frequency_map, binary_model_lab, bondi_hoyle_model_lab, fourier_model_lab, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
 
 
 st.set_page_config(
@@ -679,6 +679,107 @@ def model_lab_bondi_hoyle_plot(model_result: dict, app_result: dict) -> go.Figur
     return frame(fig)
 
 
+def model_lab_pulse_profile_plot(model_result: dict, app_result: dict) -> go.Figure:
+    phase = np.asarray(model_result.get("phase", []), dtype=float)
+    flux = np.asarray(model_result.get("flux", []), dtype=float)
+    error = np.asarray(model_result.get("error", []), dtype=float)
+    phase_2 = np.concatenate([phase, phase + 1.0]) if len(phase) else phase
+    flux_2 = np.concatenate([flux, flux]) if len(flux) else flux
+    error_2 = np.concatenate([error, error]) if len(error) else error
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=phase_2,
+        y=flux_2,
+        error_y=dict(type="data", array=error_2, visible=bool(app_result.get("has_error_column", True))),
+        mode="markers",
+        marker=dict(color="#20242a", size=7),
+        name="Binned pulse profile",
+        hovertemplate="Pulse phase=%{x:.5f}<br>Value=%{y:.6g}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=model_result.get("model_phase", []),
+        y=model_result.get("model_flux", []),
+        mode="lines",
+        line=dict(color="#2457a6", width=2),
+        name="Pulse-shape model",
+        hovertemplate="Pulse phase=%{x:.5f}<br>Model=%{y:.6g}<extra></extra>",
+    ))
+    for maximum in model_result.get("maxima", []):
+        for offset in [0.0, 1.0]:
+            fig.add_vline(x=float(maximum["phase"]) + offset, line_dash="dash", line_color="#2457a6", opacity=0.65)
+    fig.update_layout(
+        title="Pulse profile model",
+        xaxis_title="Pulse phase",
+        yaxis_title=f"Weighted mean {flux_axis_title(app_result).lower()}",
+        height=480,
+        margin=dict(l=20, r=20, t=50, b=25),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+    )
+    fig.update_xaxes(range=[0, 2])
+    apply_flux_axis(fig, app_result)
+    return frame(fig)
+
+
+def model_lab_pulse_epoch_plot(model_result: dict, app_result: dict) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=model_result.get("trial_period", []),
+        y=model_result.get("epoch_power", []),
+        mode="lines",
+        line=dict(color="#2457a6", width=2),
+        name="Epoch-folding statistic",
+        hovertemplate=f"Period=%{{x:.8g}} {app_result.get('period_unit', '')}<br>Statistic=%{{y:.6g}}<extra></extra>",
+    ))
+    if model_result.get("period") is not None:
+        fig.add_vline(x=float(model_result["period"]), line_dash="dash", line_color="#b13b32", opacity=0.8)
+    fig.update_layout(
+        title="Epoch-folding period refinement",
+        xaxis_title=f"Trial period [{app_result.get('period_unit', '')}]",
+        yaxis_title="Epoch-folding statistic",
+        height=380,
+        margin=dict(l=20, r=20, t=50, b=25),
+        showlegend=False,
+    )
+    return frame(fig)
+
+
+def model_lab_pulse_oc_plot(model_result: dict, app_result: dict) -> go.Figure:
+    arrivals = model_result.get("arrivals", [])
+    time = [row.get("time") for row in arrivals]
+    oc = [row.get("oc_time") for row in arrivals]
+    err = [row.get("arrival_time_error") for row in arrivals]
+    show_errors = bool(app_result.get("has_error_column", True)) and any(value is not None for value in err)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=time,
+        y=oc,
+        error_y=dict(type="data", array=err, visible=show_errors),
+        mode="markers",
+        marker=dict(color="#20242a", size=7),
+        name="Pulse arrivals O-C",
+        hovertemplate="Time=%{x:.6g}<br>O-C=%{y:.6g}<extra></extra>",
+    ))
+    if model_result.get("oc_model_time"):
+        fig.add_trace(go.Scatter(
+            x=model_result.get("oc_model_time", []),
+            y=model_result.get("oc_model", []),
+            mode="lines",
+            line=dict(color="#2457a6", width=2),
+            name="O-C sinusoid",
+            hovertemplate="Time=%{x:.6g}<br>Model O-C=%{y:.6g}<extra></extra>",
+        ))
+    fig.add_hline(y=0.0, line_dash="dash", line_color="#777777", opacity=0.6)
+    fig.update_layout(
+        title="Pulse arrival times",
+        xaxis_title=app_result.get("time_label", "Time"),
+        yaxis_title=f"O-C [{app_result.get('baseline_unit', '')}]",
+        height=380,
+        margin=dict(l=20, r=20, t=50, b=25),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+    )
+    return frame(fig)
+
+
 def model_lab_time_plot(model_result: dict, app_result: dict, show_errors: bool = True) -> go.Figure:
     time = np.asarray(model_result.get("data_time", []), dtype=float)
     flux = np.asarray(model_result.get("data_flux", []), dtype=float)
@@ -1191,17 +1292,84 @@ def model_lab_controls(prefix: str, location=st) -> None:
         ],
         key=f"{prefix}_model_lab_family",
     )
-    if family == "X-ray pulsation timing":
-        location.info(
-            "This model family is planned for the next implementation steps. "
-            "Fourier multi-harmonic, Eclipsing / eccentric binaries, and Bondi-Hoyle accretion are active now."
-        )
-        return
     if not result:
         location.caption("Run an analysis first, then fit models here.")
         return
     period_unit = result.get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
     default_period = result.get("folded_period") or result.get("primary_period") or ""
+    if family == "X-ray pulsation timing":
+        if f"{prefix}_model_lab_pulse_period" not in st.session_state and default_period != "":
+            st.session_state[f"{prefix}_model_lab_pulse_period"] = f"{float(default_period):.12g}"
+        cols = location.columns(2)
+        cols[0].text_input(
+            f"Pulse period [{period_unit}]",
+            key=f"{prefix}_model_lab_pulse_period",
+            placeholder="Default: folded/primary",
+        )
+        cols[1].text_input(
+            f"T0 [{result.get('baseline_unit', period_unit)}]",
+            value=st.session_state.get(f"{prefix}_model_lab_pulse_t0", ""),
+            key=f"{prefix}_model_lab_pulse_t0",
+            placeholder=f"{float(result.get('t0', 0.0)):.6g}",
+        )
+        cols = location.columns(2)
+        cols[0].number_input("Profile bins", min_value=4, max_value=120, value=st.session_state.get(f"{prefix}_model_lab_pulse_bins", 24), key=f"{prefix}_model_lab_pulse_bins")
+        cols[1].number_input("Profile harmonics", min_value=1, max_value=20, value=st.session_state.get(f"{prefix}_model_lab_pulse_harmonics", 3), key=f"{prefix}_model_lab_pulse_harmonics")
+        cols = location.columns(2)
+        cols[0].number_input("Epoch search half-width [%]", min_value=0.0, max_value=50.0, value=st.session_state.get(f"{prefix}_model_lab_pulse_search_width", 2.0), step=0.25, format="%.2f", key=f"{prefix}_model_lab_pulse_search_width")
+        cols[1].number_input("Trial periods", min_value=30, max_value=5000, value=st.session_state.get(f"{prefix}_model_lab_pulse_trials", 300), step=10, key=f"{prefix}_model_lab_pulse_trials")
+        location.number_input("Epoch-folding bins", min_value=4, max_value=80, value=st.session_state.get(f"{prefix}_model_lab_pulse_epoch_bins", 16), key=f"{prefix}_model_lab_pulse_epoch_bins")
+        cols = location.columns(2)
+        cols[0].number_input("Pulse-arrival segments", min_value=2, max_value=80, value=st.session_state.get(f"{prefix}_model_lab_pulse_segments", 8), key=f"{prefix}_model_lab_pulse_segments")
+        cols[1].number_input("Min points per segment", min_value=4, max_value=500, value=st.session_state.get(f"{prefix}_model_lab_pulse_min_points", 20), key=f"{prefix}_model_lab_pulse_min_points")
+        location.text_input(
+            f"O-C sinusoid period [{period_unit}]",
+            value=st.session_state.get(f"{prefix}_model_lab_pulse_orbital_period", ""),
+            key=f"{prefix}_model_lab_pulse_orbital_period",
+            placeholder="optional orbital trial period",
+        )
+        fit_options = ["standard", "robust", "display-optimized"]
+        global_fit = st.session_state.get(f"{prefix}_model_fit_method", "standard")
+        if global_fit not in fit_options:
+            global_fit = "standard"
+        current_fit = st.session_state.get(f"{prefix}_model_lab_pulse_fit_method", global_fit)
+        if current_fit not in fit_options:
+            current_fit = global_fit
+        location.selectbox(
+            "Pulse-shape fit method",
+            fit_options,
+            index=fit_options.index(current_fit),
+            key=f"{prefix}_model_lab_pulse_fit_method",
+        )
+        location.checkbox(
+            "Show full data set with model",
+            value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
+            key=f"{prefix}_model_lab_show_time_model",
+        )
+        if location.button("Run pulse analysis", use_container_width=True, key=f"{prefix}_fit_pulse_model"):
+            fields = fields_from_state(prefix, bootstrap_override=0)
+            fields.update({
+                "model_lab_pulse_period": str(st.session_state.get(f"{prefix}_model_lab_pulse_period", "")).strip(),
+                "model_lab_pulse_t0": str(st.session_state.get(f"{prefix}_model_lab_pulse_t0", "")).strip(),
+                "model_lab_pulse_bins": str(st.session_state.get(f"{prefix}_model_lab_pulse_bins", 24)),
+                "model_lab_pulse_harmonics": str(st.session_state.get(f"{prefix}_model_lab_pulse_harmonics", 3)),
+                "model_lab_pulse_search_width": str(st.session_state.get(f"{prefix}_model_lab_pulse_search_width", 2.0)),
+                "model_lab_pulse_trials": str(st.session_state.get(f"{prefix}_model_lab_pulse_trials", 300)),
+                "model_lab_pulse_epoch_bins": str(st.session_state.get(f"{prefix}_model_lab_pulse_epoch_bins", 16)),
+                "model_lab_pulse_segments": str(st.session_state.get(f"{prefix}_model_lab_pulse_segments", 8)),
+                "model_lab_pulse_min_points": str(st.session_state.get(f"{prefix}_model_lab_pulse_min_points", 20)),
+                "model_lab_pulse_orbital_period": str(st.session_state.get(f"{prefix}_model_lab_pulse_orbital_period", "")).strip(),
+                "model_lab_pulse_fit_method": st.session_state.get(f"{prefix}_model_lab_pulse_fit_method", global_fit),
+            })
+            with st.spinner("Running pulse period analysis..."):
+                try:
+                    st.session_state["app_model_lab_result"] = pulse_period_model_lab(result, fields)
+                except ValueError as exc:
+                    location.error(str(exc))
+                    return
+            st.rerun()
+        return
+
     if family == "Fourier multi-harmonic":
         if f"{prefix}_model_lab_period" not in st.session_state and default_period != "":
             st.session_state[f"{prefix}_model_lab_period"] = f"{float(default_period):.12g}"
@@ -1559,6 +1727,41 @@ def render_bondi_hoyle_highlight(model_result: dict, app_result: dict) -> None:
     )
 
 
+def render_pulse_highlight(model_result: dict, app_result: dict) -> None:
+    summary = model_result.get("summary", {})
+    period_unit = app_result.get("period_unit", "")
+    time_unit = app_result.get("baseline_unit", period_unit)
+    maxima = model_result.get("maxima", [])
+    epoch_stat = summary.get("epoch_folding_statistic")
+    lines = [
+        f"<strong>Best pulse period:</strong> {float(model_result.get('period', 0.0)):.8g} {period_unit}",
+        f"<strong>Input period guess:</strong> {float(model_result.get('period_guess', 0.0)):.8g} {period_unit}",
+        f"<strong>T0:</strong> {float(model_result.get('t0', 0.0)):.6g} {time_unit}",
+        f"<strong>Epoch-folding statistic:</strong> {float(epoch_stat):.5g}" if epoch_stat is not None else "<strong>Epoch-folding statistic:</strong> unavailable",
+        f"<strong>Pulse arrivals used:</strong> {int(summary.get('n_arrivals', 0))}",
+    ]
+    if summary.get("peak_to_peak_pulsed_fraction") is not None:
+        lines.append(f"<strong>Peak-to-peak pulsed fraction:</strong> {float(summary['peak_to_peak_pulsed_fraction']):.5g}")
+    if summary.get("rms_pulsed_fraction") is not None:
+        lines.append(f"<strong>RMS pulsed fraction:</strong> {float(summary['rms_pulsed_fraction']):.5g}")
+    if maxima:
+        lines.append(f"<strong>Main pulse maximum phase:</strong> {float(maxima[0].get('phase', 0.0)):.5g}")
+    oc_summary = model_result.get("oc_summary", {})
+    if oc_summary:
+        lines.append(f"<strong>O-C sinusoid period:</strong> {float(oc_summary.get('orbital_period', 0.0)):.6g} {period_unit}")
+        lines.append(f"<strong>Projected a sin i proxy:</strong> {float(oc_summary.get('oc_amplitude_time', 0.0)):.5g} {time_unit}")
+    lines.append("<strong>Pedagogical hint:</strong> epoch folding refines the pulse period, the profile fit estimates pulse shape and pulsed fraction, and O-C trends can flag Doppler delays before attempting a physical orbital timing solution.")
+    st.markdown(
+        """
+        <div style="border: 1px solid #b8bfd4; background: #f6f7fb; padding: 0.85rem 1rem; border-radius: 0.45rem; margin: 0.35rem 0 1rem 0;">
+          <div style="font-weight: 800; font-size: 1.02rem; margin-bottom: 0.35rem;">Pulse timing summary</div>
+          <div style="line-height: 1.65;">""" + "<br>".join(lines) + """</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_model_lab_outputs(result: dict | None) -> None:
     model_result = st.session_state.get("app_model_lab_result")
     if not result or not model_result:
@@ -1643,6 +1846,62 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Accretion maxima")
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
         prefix_name = "bondi_hoyle"
+    elif model_result.get("family") == "pulse":
+        st.plotly_chart(model_lab_pulse_profile_plot(model_result, result), use_container_width=True)
+        if st.session_state.get("l1_model_lab_show_time_model", True):
+            st.plotly_chart(
+                model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
+                use_container_width=True,
+            )
+        cols_plots = st.columns(2)
+        with cols_plots[0]:
+            st.plotly_chart(model_lab_pulse_epoch_plot(model_result, result), use_container_width=True)
+        with cols_plots[1]:
+            st.plotly_chart(model_lab_pulse_oc_plot(model_result, result), use_container_width=True)
+        summary = model_result.get("summary", {})
+        info_cols = st.columns(4)
+        info_cols[0].metric("Pulse period", f"{float(model_result['period']):.8g} {result.get('period_unit', '')}")
+        info_cols[1].metric("Pulsed fraction", "" if summary.get("peak_to_peak_pulsed_fraction") is None else f"{float(summary['peak_to_peak_pulsed_fraction']):.5g}")
+        info_cols[2].metric("Arrivals", f"{int(summary.get('n_arrivals', 0))}")
+        info_cols[3].metric("RMS", f"{float(summary.get('rms', 0.0)):.5g}")
+        render_pulse_highlight(model_result, result)
+        cols = st.columns([1.05, 1.0])
+        with cols[0]:
+            st.caption("Pulse-shape formula")
+            st.code(str(model_result.get("formula", "")), language="text")
+            st.caption("Pulse-shape terms")
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), use_container_width=True, hide_index=True)
+            if model_result.get("oc_formula"):
+                st.caption("Pulse-arrival O-C formula")
+                st.code(str(model_result.get("oc_formula", "")), language="text")
+                st.caption("O-C sinusoid parameters")
+                st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("oc_parameters", []))), use_container_width=True, hide_index=True)
+        with cols[1]:
+            st.caption("Global pulse fit summary")
+            st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
+            st.caption("Pulse maxima")
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
+            st.caption("Pulse arrival times")
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("arrivals", []))), use_container_width=True, hide_index=True)
+        dl_extra_cols = st.columns(2)
+        with dl_extra_cols[0]:
+            dataframe_download(
+                "Download epoch-folding search",
+                pd.DataFrame({
+                    "trial_period": model_result.get("trial_period", []),
+                    "epoch_folding_statistic": model_result.get("epoch_power", []),
+                }),
+                "pulse_epoch_folding_search.txt",
+                "app_download_pulse_epoch_search",
+            )
+        with dl_extra_cols[1]:
+            dataframe_download(
+                "Download pulse arrivals",
+                pd.DataFrame(model_result.get("arrivals", [])),
+                "pulse_arrival_times.txt",
+                "app_download_pulse_arrivals",
+            )
+        prefix_name = "pulse"
     else:
         return
     dl_cols = st.columns(3)
