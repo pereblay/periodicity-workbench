@@ -504,6 +504,15 @@ def fit_sinusoids(
             max_nfev=2000,
         )
         coeff = result.x
+    elif method == "display_optimized" and len(y) >= 4:
+        model_initial = design @ coeff
+        data_span = float(np.nanpercentile(y, 95) - np.nanpercentile(y, 5))
+        model_span = float(np.nanpercentile(model_initial, 95) - np.nanpercentile(model_initial, 5))
+        if np.isfinite(data_span) and np.isfinite(model_span) and data_span > 0.0 and model_span > 0.0:
+            amplitude_scale = data_span / model_span
+            vertical_shift = float(np.nanmedian(y) - amplitude_scale * np.nanmedian(model_initial))
+            coeff = coeff * amplitude_scale
+            coeff[0] += vertical_shift
     model = design @ coeff
     residuals = y - model
     dof = max(1, len(y) - len(coeff))
