@@ -298,6 +298,13 @@ def dataframe_download(label: str, df: pd.DataFrame, filename: str, key: str) ->
     )
 
 
+def safe_plotly_chart(label: str, figure_factory, location=st) -> None:
+    try:
+        location.plotly_chart(figure_factory(), use_container_width=True)
+    except Exception as exc:
+        location.error(f"{label} could not be rendered: {exc}")
+
+
 def y_range(values) -> list[float] | None:
     arr = np.asarray([v for v in values if v is not None], dtype=float)
     arr = arr[np.isfinite(arr)]
@@ -1377,6 +1384,8 @@ def render_search_outputs(result: dict | None) -> None:
         return
     st.divider()
     st.subheader("Frequency analysis")
+    if result.get("analysis_message"):
+        st.info(str(result["analysis_message"]))
     metric_cols = st.columns(4)
     metric_cols[0].metric("Rows used", f"{result['n_points']}")
     baseline_unit = result.get("baseline_unit", "d")
@@ -1386,10 +1395,10 @@ def render_search_outputs(result: dict | None) -> None:
     metric_cols[2].metric("Primary period", "" if primary is None else f"{float(primary):.6g} {period_unit}")
     metric_cols[3].metric("T0", f"{float(result.get('t0', 0.0)):.4f}")
     cols = st.columns(3)
-    cols[0].plotly_chart(periodogram(result, "power", "peaks", "Lomb-Scargle periodogram"), use_container_width=True)
-    cols[1].plotly_chart(window_plot(result), use_container_width=True)
+    safe_plotly_chart("Lomb-Scargle periodogram", lambda: periodogram(result, "power", "peaks", "Lomb-Scargle periodogram"), cols[0])
+    safe_plotly_chart("Sampling window", lambda: window_plot(result), cols[1])
     with cols[2]:
-        st.plotly_chart(folded_plot(result), use_container_width=True)
+        safe_plotly_chart("Folded profile", lambda: folded_plot(result), st)
         st.caption("Folded periods")
         st.dataframe(folded_period_table(result), use_container_width=True, hide_index=True)
         folded_terms = result.get("fold_fit_terms", [])
@@ -1438,7 +1447,7 @@ def render_secondary_outputs(result: dict | None) -> None:
         st.divider()
         st.subheader("Iterative prewhitening")
         cols = st.columns([1.2, 1.0])
-        cols[0].plotly_chart(periodogram(result, "residual_power", "residual_peaks", "After prewhitening"), use_container_width=True)
+        safe_plotly_chart("Prewhitened periodogram", lambda: periodogram(result, "residual_power", "residual_peaks", "After prewhitening"), cols[0])
         with cols[1]:
             st.caption("Prewhitening steps")
             st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), use_container_width=True, hide_index=True)
@@ -1450,15 +1459,15 @@ def render_secondary_outputs(result: dict | None) -> None:
             st.caption("Remaining LS peaks after prewhitening")
             st.dataframe(peaks_dataframe(result.get("residual_peaks", [])), use_container_width=True, hide_index=True)
     if st.session_state.get("app_show_model") and result.get("has_prewhitening"):
-        st.plotly_chart(
-            prewhitening_model_plot(result, st.session_state.get("l1_show_model_errors", True)),
-            use_container_width=True,
+        safe_plotly_chart(
+            "Prewhitening model",
+            lambda: prewhitening_model_plot(result, st.session_state.get("l1_show_model_errors", True)),
         )
     advanced = st.session_state.get("app_advanced_result")
     if advanced:
         st.divider()
         st.subheader("Period tomography")
-        st.plotly_chart(advanced_plot(advanced), use_container_width=True)
+        safe_plotly_chart("Period tomography", lambda: advanced_plot(advanced))
 
 
 def model_parameter_value(model_result: dict, name: str) -> float | None:
@@ -1566,11 +1575,11 @@ def render_model_lab_outputs(result: dict | None) -> None:
     st.divider()
     st.subheader("Model laboratory")
     if model_result.get("family") == "fourier":
-        st.plotly_chart(model_lab_fourier_plot(model_result, result), use_container_width=True)
+        safe_plotly_chart("Fourier model", lambda: model_lab_fourier_plot(model_result, result))
         if st.session_state.get("l1_model_lab_show_time_model", True):
-            st.plotly_chart(
-                model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+            safe_plotly_chart(
+                "Fourier time-domain model",
+                lambda: model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
             )
         info_cols = st.columns(4)
         info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
@@ -1592,11 +1601,11 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
         prefix_name = "fourier"
     elif model_result.get("family") == "binary":
-        st.plotly_chart(model_lab_binary_plot(model_result, result), use_container_width=True)
+        safe_plotly_chart("Binary model", lambda: model_lab_binary_plot(model_result, result))
         if st.session_state.get("l1_model_lab_show_time_model", True):
-            st.plotly_chart(
-                model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+            safe_plotly_chart(
+                "Binary time-domain model",
+                lambda: model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
             )
         info_cols = st.columns(4)
         info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
@@ -1618,11 +1627,11 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
         prefix_name = "binary"
     elif model_result.get("family") == "bondi_hoyle":
-        st.plotly_chart(model_lab_bondi_hoyle_plot(model_result, result), use_container_width=True)
+        safe_plotly_chart("Bondi-Hoyle model", lambda: model_lab_bondi_hoyle_plot(model_result, result))
         if st.session_state.get("l1_model_lab_show_time_model", True):
-            st.plotly_chart(
-                model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+            safe_plotly_chart(
+                "Bondi-Hoyle time-domain model",
+                lambda: model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
             )
         summary = model_result.get("summary", {})
         info_cols = st.columns(4)
