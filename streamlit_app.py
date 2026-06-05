@@ -596,6 +596,51 @@ def model_lab_fourier_plot(model_result: dict, app_result: dict) -> go.Figure:
     return frame(fig)
 
 
+def model_lab_time_plot(model_result: dict, app_result: dict, show_errors: bool = True) -> go.Figure:
+    time = np.asarray(model_result.get("data_time", []), dtype=float)
+    flux = np.asarray(model_result.get("data_flux", []), dtype=float)
+    error = np.asarray(model_result.get("data_error", []), dtype=float)
+    model_at_data = np.asarray(model_result.get("model_at_data", []), dtype=float)
+    show_errors = show_errors and bool(app_result.get("has_error_column", True))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=time,
+        y=flux,
+        error_y=dict(type="data", array=error, visible=show_errors),
+        mode="markers",
+        marker=dict(color="#20242a", size=5),
+        name="Original data",
+        hovertemplate="Time=%{x:.6g}<br>Value=%{y:.6g}<extra></extra>",
+    ))
+    if len(model_at_data):
+        fig.add_trace(go.Scatter(
+            x=time,
+            y=model_at_data,
+            mode="markers",
+            marker=dict(color="#2457a6", size=5, symbol="diamond"),
+            name="Model at data",
+            hovertemplate="Time=%{x:.6g}<br>Model=%{y:.6g}<extra></extra>",
+        ))
+    fig.add_trace(go.Scatter(
+        x=model_result.get("model_time", []),
+        y=model_result.get("model_time_flux", []),
+        mode="lines",
+        line=dict(color="#2457a6", width=2),
+        name="Full model",
+        hovertemplate="Time=%{x:.6g}<br>Model=%{y:.6g}<extra></extra>",
+    ))
+    fig.update_layout(
+        title="Full data set with Fourier model",
+        xaxis_title=app_result.get("time_label", "Time"),
+        yaxis_title=flux_axis_title(app_result),
+        height=480,
+        margin=dict(l=20, r=20, t=50, b=25),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+    )
+    apply_flux_axis(fig, app_result)
+    return frame(fig)
+
+
 def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dict[str, str]:
     periods = st.session_state.get(f"{prefix}_selected_periods", [])
     excluded = st.session_state.get(f"{prefix}_excluded_periods", [])
@@ -1106,6 +1151,11 @@ def model_lab_controls(prefix: str, location=st) -> None:
         index=fit_options.index(current_fit),
         key=f"{prefix}_model_lab_fit_method",
     )
+    location.checkbox(
+        "Show full data set with model",
+        value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
+        key=f"{prefix}_model_lab_show_time_model",
+    )
     if location.button("Fit Fourier model", use_container_width=True, key=f"{prefix}_fit_fourier_model"):
         fields = fields_from_state(prefix, bootstrap_override=0)
         fields.update({
@@ -1218,6 +1268,11 @@ def render_model_lab_outputs(result: dict | None) -> None:
     if model_result.get("family") != "fourier":
         return
     st.plotly_chart(model_lab_fourier_plot(model_result, result), use_container_width=True)
+    if st.session_state.get("l1_model_lab_show_time_model", True):
+        st.plotly_chart(
+            model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
+            use_container_width=True,
+        )
     info_cols = st.columns(4)
     info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
     info_cols[1].metric("Harmonics", f"{int(model_result['selected_harmonics'])}")
@@ -1236,7 +1291,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
         st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("trials", []))), use_container_width=True, hide_index=True)
         st.caption("Model maxima")
         st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
-    dl_cols = st.columns(2)
+    dl_cols = st.columns(3)
     with dl_cols[0]:
         dataframe_download(
             "Download Fourier folded data",
@@ -1258,6 +1313,16 @@ def render_model_lab_outputs(result: dict | None) -> None:
             }),
             "fourier_model.txt",
             "app_download_fourier_model",
+        )
+    with dl_cols[2]:
+        dataframe_download(
+            "Download time-domain model",
+            pd.DataFrame({
+                "time": model_result.get("model_time", []),
+                "model_flux": model_result.get("model_time_flux", []),
+            }),
+            "fourier_time_model.txt",
+            "app_download_fourier_time_model",
         )
 
 

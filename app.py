@@ -852,6 +852,9 @@ def fourier_model_lab(result: dict, fields: dict[str, str]) -> dict:
     centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
     model_phase = np.linspace(0.0, 2.0, 1600)
     model_flux = sinusoid_design(model_phase % 1.0, ratios) @ coeff
+    model_time = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), 2500)
+    model_time_phase = ((model_time - t0) / period) % 1.0
+    model_time_flux = sinusoid_design(model_time_phase, ratios) @ coeff
     maxima = periodic_model_maxima(ratios, coeff)
 
     terms = []
@@ -895,11 +898,14 @@ def fourier_model_lab(result: dict, fields: dict[str, str]) -> dict:
         "error": errors.tolist(),
         "counts": counts.tolist(),
         "data_phase": phase.tolist(),
+        "data_time": t.tolist(),
         "data_flux": y.tolist(),
         "data_error": dy.tolist(),
         "model_at_data": model_at_data.tolist(),
         "model_phase": model_phase.tolist(),
         "model_flux": model_flux.tolist(),
+        "model_time": model_time.tolist(),
+        "model_time_flux": model_time_flux.tolist(),
         "maxima": [{"phase": ph, "flux": val} for ph, val in maxima],
         "terms": terms,
         "summary": {
