@@ -455,9 +455,11 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
     time = np.asarray(series["time"], dtype=float)
     flux = np.asarray(series["flux"], dtype=float)
     error = np.asarray(series["error"], dtype=float)
-    model_at_data = np.asarray(series["prewhitening_model_flux"], dtype=float)
+    model_key = "prewhitening_display_model_flux" if "prewhitening_display_model_flux" in series else "prewhitening_model_flux"
+    model_at_data = np.asarray(series[model_key], dtype=float)
     residual = flux - model_at_data
-    terms = result.get("prewhitening_terms", [])
+    terms = result.get("prewhitening_display_terms") or result.get("prewhitening_terms", [])
+    display_model = bool(result.get("prewhitening_display_terms"))
     frequencies = [float(term["frequency"]) for term in terms]
     dense_time = np.linspace(float(np.nanmin(time)), float(np.nanmax(time)), 2500)
     dense_model = None
@@ -493,7 +495,7 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
         y=model_at_data,
         mode="markers",
         marker=dict(color="#2457a6", size=5, symbol="diamond"),
-        name="Prewhitening model at data",
+        name="Display model at data" if display_model else "Prewhitening model at data",
         hovertemplate="Time=%{x:.5f}<br>Model=%{y:.6g}<extra></extra>",
     ), row=1, col=1)
     if dense_model is not None:
@@ -502,7 +504,7 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
             y=dense_model,
             mode="lines",
             line=dict(color="#2457a6", width=2),
-            name="Full model",
+            name="Full display model" if display_model else "Full model",
             hovertemplate="Time=%{x:.5f}<br>Full model=%{y:.6g}<extra></extra>",
         ), row=1, col=1)
     fig.add_trace(go.Scatter(

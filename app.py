@@ -1039,6 +1039,19 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         )
         for row in prewhitening_table:
             row["offset"] = float(row.get("offset", 0.0)) + y_offset
+        if fit_method == "display_optimized":
+            prewhiten_display_model, prewhitening_display_table = fit_sinusoids_with_terms(
+                t,
+                y_analysis,
+                dy,
+                prewhiten_terms,
+                method=fit_method,
+            )
+            for row in prewhitening_display_table:
+                row["offset"] = float(row.get("offset", 0.0)) + y_offset
+        else:
+            prewhiten_display_model = prewhiten_model
+            prewhitening_display_table = []
         residuals = y_analysis - prewhiten_model
         residual_power, residual_ls, residual_peaks = find_lomb_scargle_peaks(
             t, residuals, dy, freq, max_peaks, min_considered_period=min_considered_period
@@ -1078,7 +1091,9 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         residual_peaks.sort(key=lambda peak: peak.power, reverse=True)
     else:
         prewhiten_model = np.zeros_like(y_analysis)
+        prewhiten_display_model = prewhiten_model
         prewhitening_table = []
+        prewhitening_display_table = []
         residual_power = np.zeros_like(power)
         residual_peaks = []
 
@@ -1099,6 +1114,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "has_prewhitening": bool(prewhitening_table),
         "prewhiten_periods": prewhiten_base_periods,
         "prewhitening_terms": prewhitening_table,
+        "prewhitening_display_terms": prewhitening_display_table,
         "window_peaks": window_peaks,
         "peaks": [asdict(p) for p in peaks],
         "residual_peaks": [asdict(p) for p in residual_peaks],
@@ -1117,6 +1133,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             "flux": y.tolist(),
             "error": dy.tolist(),
             "prewhitening_model_flux": (prewhiten_model + y_offset).tolist(),
+            "prewhitening_display_model_flux": (prewhiten_display_model + y_offset).tolist(),
             "fold_phase": folded["phase"].tolist(),
             "fold_flux": folded["flux"].tolist(),
             "fold_error": folded["error"].tolist(),
