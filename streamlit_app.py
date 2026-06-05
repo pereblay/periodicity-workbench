@@ -789,7 +789,7 @@ def input_controls(prefix: str, location=st) -> None:
     if current_fit_method not in fit_options:
         current_fit_method = "standard"
     fit_method = location.selectbox(
-        "Model fitting",
+        "Sinusoidal fitting",
         fit_options,
         index=fit_options.index(current_fit_method),
         key=f"{prefix}_model_fit_method",
