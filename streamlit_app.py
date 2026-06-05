@@ -1472,7 +1472,7 @@ def layout_one() -> None:
             folded_controls(prefix, st)
         with st.expander("Iterative Prewhitening", expanded=False):
             prewhitening_controls(prefix, st)
-        with st.expander("Advanced Mode", expanded=False):
+        with st.expander("Period Tomography", expanded=False):
             advanced_controls(prefix, st)
         with st.expander("Model Laboratory", expanded=False):
             model_lab_controls(prefix, st)
