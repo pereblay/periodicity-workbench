@@ -666,7 +666,7 @@ def input_controls(prefix: str, location=st) -> None:
     fit_help = {
         "standard": "Weighted least-squares fit using the provided errors.",
         "robust": "Robust soft-L1 fit that downweights outliers and over-dominant points.",
-        "display-optimized": "Unweighted fit, then amplitude and vertical offset are matched to the displayed data range.",
+        "display-optimized": "Unweighted fit, then amplitude and vertical offset are matched to the displayed 5-95% data range.",
     }
     location.caption(fit_help[fit_method])
     location.caption("Analysis limits")
