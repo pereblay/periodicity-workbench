@@ -1369,6 +1369,63 @@ def render_secondary_outputs(result: dict | None) -> None:
         st.plotly_chart(advanced_plot(advanced), use_container_width=True)
 
 
+def model_parameter_value(model_result: dict, name: str) -> float | None:
+    for row in model_result.get("parameters", []):
+        if row.get("parameter") == name:
+            value = row.get("value")
+            return None if value is None else float(value)
+    return None
+
+
+def render_binary_orbital_highlight(model_result: dict, app_result: dict) -> None:
+    summary = model_result.get("summary", {})
+    period_unit = app_result.get("period_unit", "")
+    time_unit = app_result.get("baseline_unit", period_unit)
+    model_kind = str(model_result.get("model_kind", "")).replace("_", " ")
+    lines = [
+        f"<strong>Period:</strong> {float(model_result.get('period', 0.0)):.6g} {period_unit}",
+        f"<strong>T0 / reference epoch:</strong> {float(model_result.get('t0', 0.0)):.6g} {time_unit}",
+        f"<strong>Model:</strong> {model_kind}",
+    ]
+    if model_result.get("model_kind") == "eccentric_harmonic":
+        eccentricity = summary.get("eccentricity")
+        if eccentricity is not None:
+            lines.append(f"<strong>Eccentricity:</strong> {float(eccentricity):.4g}")
+        lines.append("<strong>Inclination:</strong> not constrained by this empirical fit")
+        lines.append("<strong>Mass ratio:</strong> not constrained by this empirical fit")
+    else:
+        primary_phase = model_parameter_value(model_result, "primary_phase")
+        secondary_phase = model_parameter_value(model_result, "secondary_phase")
+        primary_depth = model_parameter_value(model_result, "primary_depth")
+        secondary_depth = model_parameter_value(model_result, "secondary_depth")
+        if primary_phase is not None:
+            lines.append(f"<strong>Primary eclipse phase:</strong> {primary_phase:.5g}")
+        if secondary_phase is not None:
+            separation = (secondary_phase - primary_phase) % 1.0 if primary_phase is not None else None
+            lines.append(f"<strong>Secondary eclipse phase:</strong> {secondary_phase:.5g}")
+            if separation is not None:
+                lines.append(f"<strong>Eclipse separation:</strong> {separation:.5g} in phase")
+        if primary_depth is not None:
+            lines.append(f"<strong>Primary depth/sign:</strong> {primary_depth:.5g}")
+        if secondary_depth is not None:
+            lines.append(f"<strong>Secondary depth/sign:</strong> {secondary_depth:.5g}")
+        lines.append("<strong>Eccentricity:</strong> not directly constrained by the empirical eclipse model")
+        lines.append("<strong>Inclination / mass ratio:</strong> require a physical binary model such as ellc or external constraints")
+    if summary.get("BIC") is not None:
+        lines.append(f"<strong>BIC:</strong> {float(summary['BIC']):.5g}")
+    if summary.get("rms") is not None:
+        lines.append(f"<strong>RMS:</strong> {float(summary['rms']):.5g}")
+    st.markdown(
+        """
+        <div style="border: 1px solid #b7c7e6; background: #f3f7ff; padding: 0.85rem 1rem; border-radius: 0.45rem; margin: 0.35rem 0 1rem 0;">
+          <div style="font-weight: 800; font-size: 1.02rem; margin-bottom: 0.35rem;">Basic orbital information from this fit</div>
+          <div style="line-height: 1.65;">""" + "<br>".join(lines) + """</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_model_lab_outputs(result: dict | None) -> None:
     model_result = st.session_state.get("app_model_lab_result")
     if not result or not model_result:
@@ -1414,6 +1471,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
         summary = model_result.get("summary", {})
         info_cols[2].metric("BIC", f"{float(summary.get('BIC', 0.0)):.5g}")
         info_cols[3].metric("RMS", f"{float(summary.get('rms', 0.0)):.5g}")
+        render_binary_orbital_highlight(model_result, result)
         cols = st.columns([1.05, 1.0])
         with cols[0]:
             st.caption("Binary model formula")
