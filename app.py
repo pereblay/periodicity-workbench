@@ -783,6 +783,20 @@ def periodic_model_maxima(frequencies: list[float], coeff: np.ndarray) -> list[t
     return maxima
 
 
+def sampled_curve_extrema(
+    phase_grid: np.ndarray,
+    values: np.ndarray,
+    kind: str = "model maximum",
+) -> list[dict[str, float | str]]:
+    peak_idx, _ = find_peaks(values)
+    extrema = [
+        {"phase": float(phase_grid[idx]), "flux": float(values[idx]), "kind": kind}
+        for idx in peak_idx
+        if 0.0 <= phase_grid[idx] < 1.0
+    ]
+    return extrema
+
+
 def fourier_model_lab(result: dict, fields: dict[str, str]) -> dict:
     series = result.get("series", {})
     t = np.asarray(series.get("time", []), dtype=float)
@@ -917,6 +931,301 @@ def fourier_model_lab(result: dict, fields: dict[str, str]) -> dict:
             "n_parameters": selected_trial["n_parameters"],
         },
         "trials": clean_trials,
+    }
+
+
+def solve_kepler(mean_anomaly: np.ndarray, eccentricity: float, max_iter: int = 60) -> np.ndarray:
+    mean_anomaly = np.asarray(mean_anomaly, dtype=float)
+    eccentricity = float(np.clip(eccentricity, 0.0, 0.95))
+    eccentric_anomaly = mean_anomaly.copy()
+    if eccentricity > 0.75:
+        eccentric_anomaly = np.where(np.sin(mean_anomaly) >= 0.0, np.pi, -np.pi)
+    for _ in range(max_iter):
+        step = (eccentric_anomaly - eccentricity * np.sin(eccentric_anomaly) - mean_anomaly) / (
+            1.0 - eccentricity * np.cos(eccentric_anomaly)
+        )
+        eccentric_anomaly -= step
+        if np.nanmax(np.abs(step)) < 1e-12:
+            break
+    return eccentric_anomaly
+
+
+def true_anomaly_from_phase(phase: np.ndarray, eccentricity: float) -> np.ndarray:
+    mean_anomaly = 2.0 * np.pi * phase
+    eccentric_anomaly = solve_kepler(mean_anomaly, eccentricity)
+    return np.arctan2(
+        np.sqrt(1.0 - eccentricity**2) * np.sin(eccentric_anomaly),
+        np.cos(eccentric_anomaly) - eccentricity,
+    )
+
+
+def eccentric_design(phase: np.ndarray, eccentricity: float, n_harmonics: int) -> np.ndarray:
+    true_anomaly = true_anomaly_from_phase(phase, eccentricity)
+    cols = [np.ones_like(phase)]
+    for order in range(1, n_harmonics + 1):
+        angle = order * true_anomaly
+        cols.extend([np.cos(angle), np.sin(angle)])
+    return np.column_stack(cols)
+
+
+def fit_weighted_design(design: np.ndarray, y: np.ndarray, dy: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict[str, float | str]]:
+    weights = safe_weights(dy, "standard")
+    sqrt_weights = np.sqrt(weights)
+    coeff, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], y * sqrt_weights, rcond=None)
+    model = design @ coeff
+    residuals = y - model
+    dof = max(1, len(y) - len(coeff))
+    summary: dict[str, float | str] = {
+        "method": "weighted",
+        "offset": float(coeff[0]),
+        "rms": float(np.sqrt(np.mean(residuals**2))) if len(residuals) else None,
+        "weighted_rms": float(np.sqrt(np.average(residuals**2, weights=weights))) if len(residuals) else None,
+        "chi2_red": float(np.sum(weights * residuals**2) / dof) if len(residuals) else None,
+        "n_points": int(len(y)),
+    }
+    return model, coeff, summary
+
+
+def fit_eccentric_harmonic_model(
+    phase: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    n_harmonics: int,
+    fit_eccentricity: bool,
+    eccentricity_guess: float,
+) -> tuple[np.ndarray, np.ndarray, float, dict[str, float | str]]:
+    n_harmonics = max(1, int(n_harmonics))
+    eccentricity_guess = float(np.clip(eccentricity_guess, 0.0, 0.9))
+
+    def score(eccentricity: float) -> float:
+        design = eccentric_design(phase, eccentricity, n_harmonics)
+        model, _, _ = fit_weighted_design(design, y, dy)
+        weights = safe_weights(dy, "standard")
+        return float(np.sum(weights * (y - model) ** 2))
+
+    if fit_eccentricity:
+        optimized = minimize_scalar(score, bounds=(0.0, 0.9), method="bounded", options={"xatol": 1e-4})
+        eccentricity = float(optimized.x)
+    else:
+        eccentricity = eccentricity_guess
+    design = eccentric_design(phase, eccentricity, n_harmonics)
+    model, coeff, summary = fit_weighted_design(design, y, dy)
+    summary["method"] = "eccentric_harmonic"
+    summary["eccentricity"] = eccentricity
+    return model, coeff, eccentricity, summary
+
+
+def circular_distance(phase: np.ndarray, center: float) -> np.ndarray:
+    return ((phase - center + 0.5) % 1.0) - 0.5
+
+
+def eclipse_gaussian(phase: np.ndarray, center: float, width: float) -> np.ndarray:
+    width = max(float(width), 1e-4)
+    return np.exp(-0.5 * (circular_distance(phase, center) / width) ** 2)
+
+
+def empirical_eclipse_model(phase: np.ndarray, params: np.ndarray, include_secondary: bool) -> np.ndarray:
+    offset, ellip_cos, ellip_sin, depth1, center1, width1 = params[:6]
+    model = (
+        offset
+        + ellip_cos * np.cos(4.0 * np.pi * phase)
+        + ellip_sin * np.sin(4.0 * np.pi * phase)
+        + depth1 * eclipse_gaussian(phase, center1, width1)
+    )
+    if include_secondary:
+        depth2, center2, width2 = params[6:9]
+        model += depth2 * eclipse_gaussian(phase, center2, width2)
+    return model
+
+
+def fit_empirical_eclipse_model(
+    phase: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    include_secondary: bool,
+    primary_center_guess: float | None,
+    secondary_center_guess: float | None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float | str]]:
+    weights = safe_weights(dy, "standard")
+    sqrt_weights = np.sqrt(weights)
+    median = float(np.nanmedian(y))
+    span = max(float(np.nanpercentile(y, 95) - np.nanpercentile(y, 5)), 1e-6)
+    if primary_center_guess is None:
+        primary_center_guess = float(phase[int(np.nanargmax(np.abs(y - median)))])
+    if secondary_center_guess is None:
+        secondary_center_guess = float((primary_center_guess + 0.5) % 1.0)
+    depth1_guess = float(y[np.argmin(np.abs(circular_distance(phase, primary_center_guess)))] - median)
+    depth2_guess = float(y[np.argmin(np.abs(circular_distance(phase, secondary_center_guess)))] - median)
+    params0 = [
+        median,
+        0.0,
+        0.0,
+        depth1_guess,
+        primary_center_guess % 1.0,
+        0.05,
+    ]
+    lower = [median - 3.0 * span, -3.0 * span, -3.0 * span, -3.0 * span, 0.0, 0.005]
+    upper = [median + 3.0 * span, 3.0 * span, 3.0 * span, 3.0 * span, 1.0, 0.3]
+    if include_secondary:
+        params0.extend([depth2_guess, secondary_center_guess % 1.0, 0.05])
+        lower.extend([-3.0 * span, 0.0, 0.005])
+        upper.extend([3.0 * span, 1.0, 0.3])
+
+    result = least_squares(
+        lambda params: (empirical_eclipse_model(phase, params, include_secondary) - y) * sqrt_weights,
+        np.asarray(params0, dtype=float),
+        bounds=(np.asarray(lower, dtype=float), np.asarray(upper, dtype=float)),
+        loss="soft_l1",
+        f_scale=max(float(np.nanmedian(dy[np.isfinite(dy) & (dy > 0.0)])) if np.any(np.isfinite(dy) & (dy > 0.0)) else span * 0.05, 1e-8),
+        max_nfev=5000,
+    )
+    params = result.x
+    model = empirical_eclipse_model(phase, params, include_secondary)
+    residuals = y - model
+    dof = max(1, len(y) - len(params))
+    summary: dict[str, float | str] = {
+        "method": "empirical_eclipses",
+        "offset": float(params[0]),
+        "rms": float(np.sqrt(np.mean(residuals**2))) if len(residuals) else None,
+        "weighted_rms": float(np.sqrt(np.average(residuals**2, weights=weights))) if len(residuals) else None,
+        "chi2_red": float(np.sum(weights * residuals**2) / dof) if len(residuals) else None,
+        "n_points": int(len(y)),
+    }
+    return model, params, summary
+
+
+def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
+    series = result.get("series", {})
+    t = np.asarray(series.get("time", []), dtype=float)
+    y = np.asarray(series.get("flux", []), dtype=float)
+    dy = np.asarray(series.get("error", []), dtype=float)
+    if len(t) < 8 or len(y) != len(t):
+        raise ValueError("Binary model lab requires a completed analysis with at least 8 data points")
+    if len(dy) != len(t):
+        dy = np.ones_like(y)
+
+    period_raw = str(fields.get("model_lab_binary_period", fields.get("model_lab_period", ""))).strip()
+    default_period = result.get("folded_period") or result.get("primary_period")
+    if period_raw:
+        period = float(period_raw)
+    elif default_period is not None:
+        period = float(default_period)
+    else:
+        raise ValueError("Choose a binary model period or run an analysis with a primary period")
+    if not np.isfinite(period) or period <= 0.0:
+        raise ValueError("Binary model period must be positive")
+    t0_raw = str(fields.get("model_lab_binary_t0", fields.get("model_lab_t0", ""))).strip()
+    t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
+    n_bins = max(4, int(fields.get("model_lab_binary_bins", fields.get("fold_bins", "24"))))
+    phase = ((t - t0) / period) % 1.0
+    centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
+    model_kind = fields.get("model_lab_binary_kind", "eccentric_harmonic").strip().lower()
+    model_time = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), 2500)
+    model_time_phase = ((model_time - t0) / period) % 1.0
+    model_phase = np.linspace(0.0, 2.0, 1600)
+
+    if model_kind == "empirical_eclipses":
+        include_secondary = str(fields.get("model_lab_binary_secondary", "true")).strip().lower() in {"1", "true", "yes", "on"}
+        primary_guess = optional_float(fields.get("model_lab_binary_primary_phase"))
+        secondary_guess = optional_float(fields.get("model_lab_binary_secondary_phase"))
+        model_at_data, params, summary = fit_empirical_eclipse_model(
+            phase,
+            y,
+            dy,
+            include_secondary,
+            primary_guess,
+            secondary_guess,
+        )
+        model_flux = empirical_eclipse_model(model_phase % 1.0, params, include_secondary)
+        model_time_flux = empirical_eclipse_model(model_time_phase, params, include_secondary)
+        residuals = y - model_at_data
+        n_parameters = len(params)
+        aic, bic = information_criteria(residuals, n_parameters)
+        params_table = [
+            {"parameter": "offset", "value": float(params[0])},
+            {"parameter": "ellipsoidal_cos", "value": float(params[1])},
+            {"parameter": "ellipsoidal_sin", "value": float(params[2])},
+            {"parameter": "primary_depth", "value": float(params[3])},
+            {"parameter": "primary_phase", "value": float(params[4])},
+            {"parameter": "primary_width_phase", "value": float(params[5])},
+        ]
+        if include_secondary:
+            params_table.extend([
+                {"parameter": "secondary_depth", "value": float(params[6])},
+                {"parameter": "secondary_phase", "value": float(params[7])},
+                {"parameter": "secondary_width_phase", "value": float(params[8])},
+            ])
+        formula = "y(phi) = C + E_c cos(4 pi phi) + E_s sin(4 pi phi) + D1 exp(-0.5 d(phi,phi1)^2/w1^2)"
+        if include_secondary:
+            formula += " + D2 exp(-0.5 d(phi,phi2)^2/w2^2)"
+        extrema = [
+            {"phase": float(params[4]), "flux": float(empirical_eclipse_model(np.asarray([params[4]]), params, include_secondary)[0]), "kind": "primary eclipse"},
+        ]
+        if include_secondary:
+            extrema.append({"phase": float(params[7]), "flux": float(empirical_eclipse_model(np.asarray([params[7]]), params, include_secondary)[0]), "kind": "secondary eclipse"})
+    else:
+        n_harmonics = max(1, int(fields.get("model_lab_binary_harmonics", "2")))
+        fit_eccentricity = str(fields.get("model_lab_binary_fit_eccentricity", "true")).strip().lower() in {"1", "true", "yes", "on"}
+        eccentricity_guess = float(fields.get("model_lab_binary_eccentricity", "0.2"))
+        model_at_data, coeff, eccentricity, summary = fit_eccentric_harmonic_model(
+            phase,
+            y,
+            dy,
+            n_harmonics,
+            fit_eccentricity,
+            eccentricity_guess,
+        )
+        model_flux = eccentric_design(model_phase % 1.0, eccentricity, n_harmonics) @ coeff
+        model_time_flux = eccentric_design(model_time_phase, eccentricity, n_harmonics) @ coeff
+        residuals = y - model_at_data
+        n_parameters = len(coeff) + (1 if fit_eccentricity else 0)
+        aic, bic = information_criteria(residuals, n_parameters)
+        params_table = [
+            {"parameter": "eccentricity", "value": eccentricity},
+            {"parameter": "offset", "value": float(coeff[0])},
+        ]
+        for idx in range(n_harmonics):
+            cos_idx = 1 + 2 * idx
+            sin_idx = cos_idx + 1
+            params_table.extend([
+                {"parameter": f"cos_true_anomaly_h{idx + 1}", "value": float(coeff[cos_idx])},
+                {"parameter": f"sin_true_anomaly_h{idx + 1}", "value": float(coeff[sin_idx])},
+                {"parameter": f"amplitude_h{idx + 1}", "value": float(np.hypot(coeff[cos_idx], coeff[sin_idx]))},
+            ])
+        formula = "y(t) = C + sum_k [a_k cos(k nu(t,e)) + b_k sin(k nu(t,e))], with T0 as periastron epoch"
+        extrema = sampled_curve_extrema(model_phase, model_flux, "model maximum")
+
+    summary = {
+        **summary,
+        "period": period,
+        "T0": t0,
+        "AIC": aic,
+        "BIC": bic,
+        "n_parameters": n_parameters,
+    }
+    return {
+        "family": "binary",
+        "model_kind": model_kind,
+        "period": period,
+        "t0": t0,
+        "bins": n_bins,
+        "phase": centers.tolist(),
+        "flux": means.tolist(),
+        "error": errors.tolist(),
+        "counts": counts.tolist(),
+        "data_phase": phase.tolist(),
+        "data_time": t.tolist(),
+        "data_flux": y.tolist(),
+        "data_error": dy.tolist(),
+        "model_at_data": model_at_data.tolist(),
+        "model_phase": model_phase.tolist(),
+        "model_flux": model_flux.tolist(),
+        "model_time": model_time.tolist(),
+        "model_time_flux": model_time_flux.tolist(),
+        "extrema": extrema,
+        "parameters": params_table,
+        "summary": summary,
+        "formula": formula,
     }
 
 
