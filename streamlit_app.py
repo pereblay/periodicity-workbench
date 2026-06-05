@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from app import advanced_time_frequency_map, read_columns, run_analysis, update_folded_profile, validate_upload
+from app import advanced_time_frequency_map, fourier_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
 
 
 st.set_page_config(
@@ -46,6 +46,7 @@ STATE_KEYS = [
     "app_fields",
     "app_prewhitening_periods",
     "app_advanced_result",
+    "app_model_lab_result",
     "app_show_model",
 ]
 
@@ -554,6 +555,47 @@ def advanced_plot(advanced: dict) -> go.Figure:
     return frame(fig)
 
 
+def model_lab_fourier_plot(model_result: dict, app_result: dict) -> go.Figure:
+    phase = np.asarray(model_result.get("phase", []), dtype=float)
+    flux = np.asarray(model_result.get("flux", []), dtype=float)
+    error = np.asarray(model_result.get("error", []), dtype=float)
+    phase_2 = np.concatenate([phase, phase + 1.0]) if len(phase) else phase
+    flux_2 = np.concatenate([flux, flux]) if len(flux) else flux
+    error_2 = np.concatenate([error, error]) if len(error) else error
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=phase_2,
+        y=flux_2,
+        error_y=dict(type="data", array=error_2, visible=bool(app_result.get("has_error_column", True))),
+        mode="markers",
+        marker=dict(color="#20242a", size=7),
+        name="Binned folded data",
+        hovertemplate="Phase=%{x:.5f}<br>Value=%{y:.6g}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=model_result.get("model_phase", []),
+        y=model_result.get("model_flux", []),
+        mode="lines",
+        line=dict(color="#2457a6", width=2),
+        name="Fourier model",
+        hovertemplate="Phase=%{x:.5f}<br>Model=%{y:.6g}<extra></extra>",
+    ))
+    for maximum in model_result.get("maxima", []):
+        for offset in [0.0, 1.0]:
+            fig.add_vline(x=float(maximum["phase"]) + offset, line_dash="dash", line_color="#2457a6", opacity=0.65)
+    fig.update_layout(
+        title="Fourier multi-harmonic model",
+        xaxis_title="Phase",
+        yaxis_title=f"Weighted mean {flux_axis_title(app_result).lower()}",
+        height=480,
+        margin=dict(l=20, r=20, t=50, b=25),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+    )
+    fig.update_xaxes(range=[0, 2])
+    apply_flux_axis(fig, app_result)
+    return frame(fig)
+
+
 def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dict[str, str]:
     periods = st.session_state.get(f"{prefix}_selected_periods", [])
     excluded = st.session_state.get(f"{prefix}_excluded_periods", [])
@@ -685,6 +727,7 @@ def input_controls(prefix: str, location=st) -> None:
                 st.session_state["app_result"] = run_with_current_file(fields)
                 st.session_state["app_fields"] = fields
                 st.session_state.pop("app_advanced_result", None)
+                st.session_state.pop("app_model_lab_result", None)
                 st.session_state["app_show_model"] = False
             except ValueError as exc:
                 location.error(str(exc))
@@ -743,6 +786,7 @@ def uncertainty_controls(prefix: str, location=st) -> None:
             with st.spinner("Updating bootstrap uncertainties..."):
                 st.session_state["app_result"] = run_with_current_file(fields)
                 st.session_state["app_fields"] = fields
+                st.session_state.pop("app_model_lab_result", None)
             st.rerun()
 
 
@@ -775,6 +819,7 @@ def manual_exclusion_controls(prefix: str, location=st) -> None:
             with st.spinner("Applying manual exclusions..."):
                 st.session_state["app_result"] = run_with_current_file(fields)
                 st.session_state["app_fields"] = fields
+                st.session_state.pop("app_model_lab_result", None)
             st.rerun()
 
 
@@ -819,6 +864,7 @@ def folded_controls(prefix: str, location=st) -> None:
             fields = fields_from_state(prefix, bootstrap_override=0)
             st.session_state["app_result"] = update_folded_profile(current_result, fields)
             st.session_state["app_fields"] = fields
+            st.session_state.pop("app_model_lab_result", None)
             st.rerun()
 
 
@@ -882,6 +928,7 @@ def prewhitening_controls(prefix: str, location=st) -> None:
                 try:
                     st.session_state["app_result"] = run_with_current_file(fields)
                     st.session_state["app_fields"] = fields
+                    st.session_state.pop("app_model_lab_result", None)
                     st.session_state["app_show_model"] = False
                 except ValueError as exc:
                     st.session_state["app_prewhitening_periods"] = previous_chain
@@ -903,6 +950,7 @@ def prewhitening_controls(prefix: str, location=st) -> None:
         )
         if "app_file_bytes" in st.session_state:
             st.session_state["app_result"] = run_with_current_file(fields_from_state(prefix, bootstrap_override=0))
+            st.session_state.pop("app_model_lab_result", None)
         st.rerun()
 
 
@@ -1003,6 +1051,81 @@ def advanced_controls(prefix: str, location=st) -> None:
                     st.rerun()
 
 
+def model_lab_controls(prefix: str, location=st) -> None:
+    result = st.session_state.get("app_result")
+    family = location.selectbox(
+        "Model family",
+        [
+            "Fourier multi-harmonic",
+            "Eclipsing / eccentric binaries",
+            "Bondi-Hoyle accretion",
+            "X-ray pulsation timing",
+        ],
+        key=f"{prefix}_model_lab_family",
+    )
+    if family != "Fourier multi-harmonic":
+        location.info(
+            "This model family is planned for the next implementation steps. "
+            "Fourier multi-harmonic fitting is active now."
+        )
+        return
+    if not result:
+        location.caption("Run an analysis first, then fit Fourier models here.")
+        return
+    period_unit = result.get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
+    default_period = result.get("folded_period") or result.get("primary_period") or ""
+    if f"{prefix}_model_lab_period" not in st.session_state and default_period != "":
+        st.session_state[f"{prefix}_model_lab_period"] = f"{float(default_period):.12g}"
+    cols = location.columns(2)
+    cols[0].text_input(
+        f"Model period [{period_unit}]",
+        key=f"{prefix}_model_lab_period",
+        placeholder="Default: folded/primary",
+    )
+    cols[1].text_input(
+        f"T0 [{result.get('baseline_unit', period_unit)}]",
+        value=st.session_state.get(f"{prefix}_model_lab_t0", ""),
+        key=f"{prefix}_model_lab_t0",
+        placeholder=f"{float(result.get('t0', 0.0)):.6g}",
+    )
+    location.number_input("Display phase bins", min_value=4, max_value=120, value=st.session_state.get(f"{prefix}_model_lab_bins", 20), key=f"{prefix}_model_lab_bins")
+    selection = location.radio("Harmonic selection", ["manual", "AIC", "BIC"], horizontal=True, key=f"{prefix}_model_lab_selection")
+    harmonic_cols = location.columns(2)
+    harmonic_cols[0].number_input("Manual harmonics", min_value=1, max_value=20, value=st.session_state.get(f"{prefix}_model_lab_harmonics", 3), key=f"{prefix}_model_lab_harmonics")
+    harmonic_cols[1].number_input("Max harmonics for AIC/BIC", min_value=1, max_value=20, value=st.session_state.get(f"{prefix}_model_lab_max_harmonics", 8), key=f"{prefix}_model_lab_max_harmonics")
+    fit_options = ["standard", "robust", "display-optimized"]
+    global_fit = st.session_state.get(f"{prefix}_model_fit_method", "standard")
+    if global_fit not in fit_options:
+        global_fit = "standard"
+    current_fit = st.session_state.get(f"{prefix}_model_lab_fit_method", global_fit)
+    if current_fit not in fit_options:
+        current_fit = global_fit
+    location.selectbox(
+        "Fourier fit method",
+        fit_options,
+        index=fit_options.index(current_fit),
+        key=f"{prefix}_model_lab_fit_method",
+    )
+    if location.button("Fit Fourier model", use_container_width=True, key=f"{prefix}_fit_fourier_model"):
+        fields = fields_from_state(prefix, bootstrap_override=0)
+        fields.update({
+            "model_lab_period": str(st.session_state.get(f"{prefix}_model_lab_period", "")).strip(),
+            "model_lab_t0": str(st.session_state.get(f"{prefix}_model_lab_t0", "")).strip(),
+            "model_lab_bins": str(st.session_state.get(f"{prefix}_model_lab_bins", 20)),
+            "model_lab_fourier_selection": selection.lower(),
+            "model_lab_fourier_harmonics": str(st.session_state.get(f"{prefix}_model_lab_harmonics", 3)),
+            "model_lab_fourier_max_harmonics": str(st.session_state.get(f"{prefix}_model_lab_max_harmonics", 8)),
+            "model_lab_fit_method": st.session_state.get(f"{prefix}_model_lab_fit_method", global_fit),
+        })
+        with st.spinner("Fitting Fourier model..."):
+            try:
+                st.session_state["app_model_lab_result"] = fourier_model_lab(result, fields)
+            except ValueError as exc:
+                location.error(str(exc))
+                return
+        st.rerun()
+
+
 def render_search_outputs(result: dict | None) -> None:
     if not result:
         st.info("Run an analysis to show plots.")
@@ -1087,6 +1210,57 @@ def render_secondary_outputs(result: dict | None) -> None:
         st.plotly_chart(advanced_plot(advanced), use_container_width=True)
 
 
+def render_model_lab_outputs(result: dict | None) -> None:
+    model_result = st.session_state.get("app_model_lab_result")
+    if not result or not model_result:
+        return
+    st.subheader("Model laboratory")
+    if model_result.get("family") != "fourier":
+        return
+    st.plotly_chart(model_lab_fourier_plot(model_result, result), use_container_width=True)
+    info_cols = st.columns(4)
+    info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
+    info_cols[1].metric("Harmonics", f"{int(model_result['selected_harmonics'])}")
+    info_cols[2].metric("Selection", str(model_result.get("selection", "manual")).upper())
+    info_cols[3].metric("RMS", f"{float(model_result.get('summary', {}).get('rms', 0.0)):.5g}")
+    cols = st.columns([1.05, 1.0])
+    with cols[0]:
+        st.caption("Fourier model equation")
+        st.code(fit_equation_text(model_result.get("terms", []), variable="phase"), language="text")
+        st.caption("Fit terms")
+        st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), use_container_width=True, hide_index=True)
+    with cols[1]:
+        st.caption("Global Fourier fit summary")
+        st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("summary", {})])), use_container_width=True, hide_index=True)
+        st.caption("Harmonic-order comparison")
+        st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("trials", []))), use_container_width=True, hide_index=True)
+        st.caption("Model maxima")
+        st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
+    dl_cols = st.columns(2)
+    with dl_cols[0]:
+        dataframe_download(
+            "Download Fourier folded data",
+            pd.DataFrame({
+                "phase": model_result.get("phase", []),
+                "flux": model_result.get("flux", []),
+                "error": model_result.get("error", []),
+                "counts": model_result.get("counts", []),
+            }),
+            "fourier_folded_profile.txt",
+            "app_download_fourier_folded",
+        )
+    with dl_cols[1]:
+        dataframe_download(
+            "Download Fourier model",
+            pd.DataFrame({
+                "phase": model_result.get("model_phase", []),
+                "model_flux": model_result.get("model_flux", []),
+            }),
+            "fourier_model.txt",
+            "app_download_fourier_model",
+        )
+
+
 def layout_one() -> None:
     prefix = "l1"
     st.title("Periodicity Workbench")
@@ -1105,10 +1279,13 @@ def layout_one() -> None:
             prewhitening_controls(prefix, st)
         with st.expander("Advanced Mode", expanded=False):
             advanced_controls(prefix, st)
+        with st.expander("Model Laboratory", expanded=False):
+            model_lab_controls(prefix, st)
     result = st.session_state.get("app_result")
     render_file_preview(prefix)
     render_search_outputs(result)
     render_secondary_outputs(result)
+    render_model_lab_outputs(result)
 
 st.sidebar.header("Analysis controls")
 

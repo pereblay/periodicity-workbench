@@ -731,6 +731,189 @@ def folded_profile(
     }
 
 
+def phase_binned_profile(
+    phase: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    n_bins: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    weights = 1.0 / np.where(np.isfinite(dy) & (dy > 0.0), dy, 1.0) ** 2
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    centers, means, errors, counts = [], [], [], []
+    for low, high in zip(edges[:-1], edges[1:]):
+        mask = (phase >= low) & (phase < high)
+        if not np.any(mask):
+            continue
+        w = weights[mask]
+        centers.append(0.5 * (low + high))
+        means.append(np.average(y[mask], weights=w))
+        errors.append(1.0 / np.sqrt(w.sum()))
+        counts.append(int(mask.sum()))
+    return np.asarray(centers), np.asarray(means), np.asarray(errors), np.asarray(counts)
+
+
+def information_criteria(residuals: np.ndarray, n_parameters: int) -> tuple[float, float]:
+    n = max(1, int(len(residuals)))
+    variance = max(float(np.mean(residuals**2)), 1e-300)
+    aic = float(n * np.log(variance) + 2 * n_parameters)
+    bic = float(n * np.log(variance) + n_parameters * np.log(n))
+    return aic, bic
+
+
+def periodic_model_maxima(frequencies: list[float], coeff: np.ndarray) -> list[tuple[float, float]]:
+    def model(ph: np.ndarray) -> np.ndarray:
+        return sinusoid_design(ph, frequencies) @ coeff
+
+    grid = np.linspace(0.0, 1.0, 50001, endpoint=False)
+    values = model(grid)
+    peak_idx, _ = find_peaks(values)
+    maxima = []
+    for idx in peak_idx:
+        guess = grid[idx]
+        result = minimize_scalar(
+            lambda x: -float(model(np.asarray([x]))[0]),
+            bounds=(max(0.0, guess - 0.03), min(1.0, guess + 0.03)),
+            method="bounded",
+        )
+        ph = float(result.x)
+        val = float(model(np.asarray([ph]))[0])
+        if all(abs(ph - old[0]) > 1e-4 for old in maxima):
+            maxima.append((ph, val))
+    maxima.sort(key=lambda item: item[0])
+    return maxima
+
+
+def fourier_model_lab(result: dict, fields: dict[str, str]) -> dict:
+    series = result.get("series", {})
+    t = np.asarray(series.get("time", []), dtype=float)
+    y = np.asarray(series.get("flux", []), dtype=float)
+    dy = np.asarray(series.get("error", []), dtype=float)
+    if len(t) < 4 or len(y) != len(t):
+        raise ValueError("Fourier model lab requires a completed analysis with at least 4 data points")
+    if len(dy) != len(t):
+        dy = np.ones_like(y)
+
+    period_raw = str(fields.get("model_lab_period", "")).strip()
+    default_period = result.get("folded_period") or result.get("primary_period")
+    if period_raw:
+        period = float(period_raw)
+    elif default_period is not None:
+        period = float(default_period)
+    else:
+        raise ValueError("Choose a Fourier model period or run an analysis with a primary period")
+    if not np.isfinite(period) or period <= 0.0:
+        raise ValueError("Fourier model period must be positive")
+
+    t0_raw = str(fields.get("model_lab_t0", "")).strip()
+    t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
+    n_bins = max(4, int(fields.get("model_lab_bins", fields.get("fold_bins", "20"))))
+    fit_method = normalize_fit_method(fields.get("model_lab_fit_method", fields.get("model_fit_method", "standard")))
+    selection = fields.get("model_lab_fourier_selection", "manual").strip().lower()
+    manual_harmonics = max(1, int(fields.get("model_lab_fourier_harmonics", "3")))
+    max_harmonics = max(1, int(fields.get("model_lab_fourier_max_harmonics", str(manual_harmonics))))
+    max_harmonics = min(max_harmonics, max(1, (len(y) - 1) // 2), 20)
+
+    phase = ((t - t0) / period) % 1.0
+    trials = []
+    selected_trial = None
+    for n_harmonics in range(1, max_harmonics + 1):
+        ratios = [float(order) for order in range(1, n_harmonics + 1)]
+        model_at_data, coeff, summary = fit_sinusoids(phase, y, dy, ratios, method=fit_method)
+        residuals = y - model_at_data
+        n_parameters = len(coeff)
+        aic, bic = information_criteria(residuals, n_parameters)
+        trial = {
+            "harmonics": n_harmonics,
+            "n_parameters": n_parameters,
+            "rms": summary["rms"],
+            "weighted_rms": summary["weighted_rms"],
+            "chi2_red": summary["chi2_red"],
+            "AIC": aic,
+            "BIC": bic,
+            "_coeff": coeff,
+            "_model": model_at_data,
+            "_summary": summary,
+        }
+        trials.append(trial)
+    if selection == "aic":
+        selected_trial = min(trials, key=lambda item: float(item["AIC"]))
+    elif selection == "bic":
+        selected_trial = min(trials, key=lambda item: float(item["BIC"]))
+    else:
+        target = min(manual_harmonics, max_harmonics)
+        selected_trial = trials[target - 1]
+        selection = "manual"
+
+    n_selected = int(selected_trial["harmonics"])
+    ratios = [float(order) for order in range(1, n_selected + 1)]
+    coeff = np.asarray(selected_trial["_coeff"], dtype=float)
+    model_at_data = np.asarray(selected_trial["_model"], dtype=float)
+    summary = dict(selected_trial["_summary"])
+    centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
+    model_phase = np.linspace(0.0, 2.0, 1600)
+    model_flux = sinusoid_design(model_phase % 1.0, ratios) @ coeff
+    maxima = periodic_model_maxima(ratios, coeff)
+
+    terms = []
+    for idx, ratio in enumerate(ratios):
+        cos_idx = 1 + 2 * idx
+        sin_idx = cos_idx + 1
+        cos_coeff = float(coeff[cos_idx])
+        sin_coeff = float(coeff[sin_idx])
+        amplitude = float(np.hypot(cos_coeff, sin_coeff))
+        terms.append(
+            {
+                "component": idx + 1,
+                "fit_method": summary["method"],
+                "offset": float(coeff[0]),
+                "frequency_ratio": ratio,
+                "period": period / ratio,
+                "cos_coeff": cos_coeff,
+                "sin_coeff": sin_coeff,
+                "amplitude": amplitude,
+                "phase_of_max": float((np.arctan2(sin_coeff, cos_coeff) / (2.0 * np.pi * ratio)) % (1.0 / ratio)) if amplitude > 0 else None,
+                "rms": summary["rms"],
+                "weighted_rms": summary["weighted_rms"],
+                "chi2_red": summary["chi2_red"],
+            }
+        )
+
+    clean_trials = [
+        {key: value for key, value in trial.items() if not key.startswith("_")}
+        for trial in trials
+    ]
+    return {
+        "family": "fourier",
+        "period": period,
+        "t0": t0,
+        "bins": n_bins,
+        "selection": selection,
+        "selected_harmonics": n_selected,
+        "period_label": result.get("period_label", "Period"),
+        "phase": centers.tolist(),
+        "flux": means.tolist(),
+        "error": errors.tolist(),
+        "counts": counts.tolist(),
+        "data_phase": phase.tolist(),
+        "data_flux": y.tolist(),
+        "data_error": dy.tolist(),
+        "model_at_data": model_at_data.tolist(),
+        "model_phase": model_phase.tolist(),
+        "model_flux": model_flux.tolist(),
+        "maxima": [{"phase": ph, "flux": val} for ph, val in maxima],
+        "terms": terms,
+        "summary": {
+            **summary,
+            "selected_harmonics": n_selected,
+            "selection": selection,
+            "AIC": selected_trial["AIC"],
+            "BIC": selected_trial["BIC"],
+            "n_parameters": selected_trial["n_parameters"],
+        },
+        "trials": clean_trials,
+    }
+
+
 def parse_period_list(text: str) -> list[float]:
     periods: list[float] = []
     for item in re.split(r"[,;\\s]+", text.strip()):
