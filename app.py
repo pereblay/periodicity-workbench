@@ -61,6 +61,10 @@ SUSPICIOUS_SHELL_PATTERNS = [
 NUMERIC_VALUE_TOKEN = re.compile(r"^[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eEdD][+\-]?\d+)?$")
 MISSING_VALUE_TOKENS = {"nan", "null", "none", "na", "n/a", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}
 COMMENT_PREFIXES = ("#", "%")
+G_SI = 6.67430e-11
+M_SUN_SI = 1.98847e30
+R_SUN_SI = 6.957e8
+DAY_SI = 86400.0
 
 
 def is_numeric_table_row(line: str) -> bool:
@@ -1335,6 +1339,41 @@ def fit_bondi_hoyle_model(
     return model, coeff, summary
 
 
+def physical_wind_to_ratio(
+    period: float,
+    period_unit: str,
+    eccentricity: float,
+    v_inf_km_s: float,
+    donor_mass_msun: float,
+    compact_mass_msun: float,
+    donor_radius_rsun: float,
+) -> dict[str, float]:
+    if period <= 0.0:
+        raise ValueError("Bondi-Hoyle period must be positive")
+    period_seconds = period * (DAY_SI if str(period_unit).lower().startswith("d") else 1.0)
+    total_mass = (donor_mass_msun + compact_mass_msun) * M_SUN_SI
+    if total_mass <= 0.0:
+        raise ValueError("Total mass must be positive")
+    semi_major_axis_m = (G_SI * total_mass * (period_seconds / (2.0 * np.pi)) ** 2) ** (1.0 / 3.0)
+    orbital_speed_m_s = 2.0 * np.pi * semi_major_axis_m / period_seconds
+    v_inf_m_s = max(v_inf_km_s, 1e-6) * 1000.0
+    wind_speed_ratio = v_inf_m_s / max(orbital_speed_m_s, 1e-12)
+    periastron_m = semi_major_axis_m * (1.0 - float(np.clip(eccentricity, 0.0, 0.95)))
+    donor_radius_m = donor_radius_rsun * R_SUN_SI
+    return {
+        "wind_speed_ratio": float(wind_speed_ratio),
+        "v_inf_km_s": float(v_inf_km_s),
+        "donor_mass_msun": float(donor_mass_msun),
+        "compact_mass_msun": float(compact_mass_msun),
+        "total_mass_msun": float(donor_mass_msun + compact_mass_msun),
+        "donor_radius_rsun": float(donor_radius_rsun),
+        "semi_major_axis_rsun": float(semi_major_axis_m / R_SUN_SI),
+        "orbital_speed_km_s": float(orbital_speed_m_s / 1000.0),
+        "periastron_distance_rsun": float(periastron_m / R_SUN_SI),
+        "radius_periastron_fraction": float(donor_radius_m / periastron_m) if periastron_m > 0.0 else float("nan"),
+    }
+
+
 def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
     series = result.get("series", {})
     t = np.asarray(series.get("time", []), dtype=float)
@@ -1359,10 +1398,25 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
     t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
     n_bins = max(4, int(fields.get("model_lab_bh_bins", fields.get("fold_bins", "24"))))
     eccentricity_guess = float(fields.get("model_lab_bh_eccentricity", "0.3"))
-    wind_speed_guess = float(fields.get("model_lab_bh_wind_speed_ratio", "3.0"))
+    wind_input_mode = fields.get("model_lab_bh_wind_input_mode", "ratio").strip().lower()
+    physical_wind: dict[str, float] = {}
+    if wind_input_mode in {"v_inf", "vinf", "physical"}:
+        physical_wind = physical_wind_to_ratio(
+            period,
+            result.get("baseline_unit", result.get("period_unit", "d")),
+            eccentricity_guess,
+            float(fields.get("model_lab_bh_vinf", "1000.0")),
+            float(fields.get("model_lab_bh_donor_mass", "18.0")),
+            float(fields.get("model_lab_bh_compact_mass", "1.4")),
+            float(fields.get("model_lab_bh_donor_radius", "8.0")),
+        )
+        wind_speed_guess = physical_wind["wind_speed_ratio"]
+    else:
+        wind_input_mode = "ratio"
+        wind_speed_guess = float(fields.get("model_lab_bh_wind_speed_ratio", "3.0"))
     wind_beta = float(fields.get("model_lab_bh_wind_beta", "0.8"))
     fit_eccentricity = str(fields.get("model_lab_bh_fit_eccentricity", "true")).strip().lower() in {"1", "true", "yes", "on"}
-    fit_wind_speed = str(fields.get("model_lab_bh_fit_wind_speed", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    fit_wind_speed = str(fields.get("model_lab_bh_fit_wind_speed", "true")).strip().lower() in {"1", "true", "yes", "on"} and wind_input_mode == "ratio"
     include_phase_lag = str(fields.get("model_lab_bh_phase_lag", "true")).strip().lower() in {"1", "true", "yes", "on"}
 
     phase = ((t - t0) / period) % 1.0
@@ -1408,9 +1462,11 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
         **summary,
         "period": period,
         "T0": t0,
+        "wind_input_mode": wind_input_mode,
         "AIC": aic,
         "BIC": bic,
         "n_parameters": n_parameters,
+        **physical_wind,
     }
     parameters = [
         {"parameter": "offset", "value": float(coeff[0])},
@@ -1420,6 +1476,17 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
         {"parameter": "wind_beta", "value": wind_beta},
         {"parameter": "phase_lag", "value": phase_lag},
     ]
+    if physical_wind:
+        parameters.extend([
+            {"parameter": "v_inf_km_s", "value": physical_wind["v_inf_km_s"]},
+            {"parameter": "donor_mass_msun", "value": physical_wind["donor_mass_msun"]},
+            {"parameter": "compact_mass_msun", "value": physical_wind["compact_mass_msun"]},
+            {"parameter": "donor_radius_rsun", "value": physical_wind["donor_radius_rsun"]},
+            {"parameter": "semi_major_axis_rsun", "value": physical_wind["semi_major_axis_rsun"]},
+            {"parameter": "orbital_speed_km_s", "value": physical_wind["orbital_speed_km_s"]},
+            {"parameter": "periastron_distance_rsun", "value": physical_wind["periastron_distance_rsun"]},
+            {"parameter": "radius_periastron_fraction", "value": physical_wind["radius_periastron_fraction"]},
+        ])
     return {
         "family": "bondi_hoyle",
         "period": period,

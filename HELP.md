@@ -1,4 +1,4 @@
-# Periodicity Workbench Help
+# Overview
 
 Periodicity Workbench is an interactive tool for exploring periodic signals in unevenly sampled light curves. It was designed around the workflow that often appears in optical and X-ray time-series analysis: load a text light curve, search for periods with a Lomb-Scargle periodogram, check whether peaks may be caused by the sampling pattern, fold the data, model the folded profile, remove known signals by prewhitening, and then explore more specialized physical or pedagogical models.
 
@@ -452,7 +452,23 @@ v_rel^2 ~ v_w^2 + v_orb^2
 y(t) = C + A [rho(r) / v_rel^3]
 ```
 
-The separation `r` and orbital velocity are computed from a Keplerian orbit in normalized units. The fitted parameters are pedagogical and phenomenological unless physical masses, wind laws, inclination, and independent orbital constraints are available.
+The separation `r` and orbital velocity are computed from a Keplerian orbit. The app can use either a dimensionless wind-speed ratio or a more pedagogical physical input based on terminal wind speed, masses, and stellar radius.
+
+When physical wind input is selected, the orbital scale is estimated from Kepler's third law:
+
+```text
+a = [G (M_donor + M_compact) (P_orb / 2 pi)^2]^(1/3)
+v_orb,scale = 2 pi a / P_orb
+v_inf / v_orb = v_inf / v_orb,scale
+```
+
+The toy wind law then uses
+
+```text
+v_w(r) = v_inf * (1 - R_donor / r)^beta
+```
+
+implemented internally as a normalized ratio. The fitted parameters remain pedagogical and phenomenological unless physical masses, wind laws, inclination, and independent orbital constraints are available.
 
 ### Parameters
 
@@ -468,8 +484,23 @@ Number of bins in the displayed folded profile.
 **Initial/fixed eccentricity**  
 Initial or fixed eccentricity.
 
+**Wind speed input**  
+Selects whether the model uses a dimensionless `v_wind / v_orb` ratio or physical wind parameters based on `v_inf`.
+
 **v_wind / v_orb**  
-Ratio of wind speed to characteristic orbital speed.
+Ratio of wind speed to characteristic orbital speed. This is the original dimensionless toy-model parameter.
+
+**v_inf [km/s]**  
+Terminal wind speed used to derive an effective `v_wind / v_orb` ratio.
+
+**Donor mass [Msun]**  
+Mass of the donor star used in Kepler's third law.
+
+**Compact mass [Msun]**  
+Mass of the compact object, usually around 1.4 Msun for a neutron star.
+
+**Donor radius [Rsun]**  
+Radius used in the simple beta-law wind acceleration term.
 
 **Wind beta**  
 Controls the simple wind acceleration law used in the toy model.
@@ -478,7 +509,7 @@ Controls the simple wind acceleration law used in the toy model.
 Optimizes eccentricity.
 
 **Fit wind speed**  
-Optimizes the wind-speed ratio.
+Optimizes the wind-speed ratio in the dimensionless mode. It is disabled in `v_inf` mode so that the user can explore how physical input parameters change the model.
 
 **Fit phase lag**  
 Allows a phase offset between the simple periastron reference and the observed modulation.

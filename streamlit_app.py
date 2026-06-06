@@ -22,8 +22,14 @@ st.markdown(
     """
     <style>
     [data-testid="stSidebar"] {
+        width: 31rem !important;
+        min-width: 31rem !important;
+        max-width: 31rem !important;
         height: 100vh !important;
         overflow: hidden !important;
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        width: 31rem !important;
     }
     [data-testid="stSidebar"] > div:first-child,
     [data-testid="stSidebarContent"] {
@@ -32,6 +38,21 @@ st.markdown(
         overflow-y: auto !important;
         overscroll-behavior: contain;
         padding-bottom: 3rem;
+    }
+    @media (max-width: 900px) {
+        [data-testid="stSidebar"],
+        [data-testid="stSidebar"] > div:first-child {
+            width: 100vw !important;
+            min-width: 100vw !important;
+            max-width: 100vw !important;
+        }
+    }
+    [data-testid="stSidebar"] [data-testid="stCheckbox"] label,
+    [data-testid="stSidebar"] [data-testid="stCheckbox"] label p {
+        white-space: normal !important;
+        overflow-wrap: normal !important;
+        word-break: normal !important;
+        hyphens: none !important;
     }
     </style>
     """,
@@ -48,14 +69,19 @@ STATE_KEYS = [
     "app_advanced_result",
     "app_model_lab_result",
     "app_show_model",
+    "app_show_help",
 ]
 
-HELP_URL = "https://github.com/pereblay/periodicity-workbench/blob/main/HELP.md"
+HELP_FILE = "HELP.md"
 
 
-def help_link(anchor: str = "") -> str:
-    suffix = f"#{anchor}" if anchor else ""
-    return f"[Help]({HELP_URL}{suffix})"
+def render_help_document() -> None:
+    st.divider()
+    try:
+        with open(HELP_FILE, "r", encoding="utf-8") as handle:
+            st.markdown(handle.read())
+    except OSError:
+        st.error("Help documentation is not available in this deployment.")
 
 
 def file_signature(uploaded_file) -> tuple[str, int, str]:
@@ -486,7 +512,7 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
         shared_xaxes=True,
         vertical_spacing=0.08,
         row_heights=[0.68, 0.32],
-        subplot_titles=("Original data and prewhitening model", "O-C residuals"),
+        subplot_titles=("Original data and prewhitening model", "Residuals"),
     )
     fig.add_trace(go.Scatter(
         x=time,
@@ -521,8 +547,8 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
         error_y=dict(type="data", array=error, visible=show_errors),
         mode="markers",
         marker=dict(color="#b13b32", size=5),
-        name="O-C",
-        hovertemplate="Time=%{x:.5f}<br>O-C=%{y:.6g}<extra></extra>",
+        name="Residuals",
+        hovertemplate="Time=%{x:.5f}<br>Residual=%{y:.6g}<extra></extra>",
     ), row=2, col=1)
     fig.add_hline(y=0.0, line_dash="dash", line_color="#777777", opacity=0.7, row=2, col=1)
     fig.update_layout(
@@ -540,7 +566,7 @@ def prewhitening_model_plot(result: dict, show_errors: bool = True) -> go.Figure
     )
     fig.update_yaxes(title_text=flux_axis_title(result), row=1, col=1)
     apply_flux_axis(fig, result, row=1, col=1)
-    fig.update_yaxes(title_text="O-C", row=2, col=1)
+    fig.update_yaxes(title_text="Residuals", row=2, col=1)
     fig.update_xaxes(title_text=result.get("time_label", "Time [d]"), row=2, col=1)
     return frame(fig)
 
@@ -924,7 +950,7 @@ def input_controls(prefix: str, location=st) -> None:
     cols[0].number_input("Time", min_value=1, value=st.session_state.get(f"{prefix}_time_col", 1), key=f"{prefix}_time_col")
     cols[1].number_input("Flux", min_value=1, value=st.session_state.get(f"{prefix}_flux_col", 2), key=f"{prefix}_flux_col")
     cols[2].number_input("Error", min_value=1, value=st.session_state.get(f"{prefix}_error_col", 3), key=f"{prefix}_error_col")
-    option_cols = location.columns([0.42, 0.29, 0.29])
+    option_cols = location.columns([0.40, 0.30, 0.30])
     option_cols[0].selectbox(
         "Time units",
         ["days", "seconds"],
@@ -965,6 +991,7 @@ def input_controls(prefix: str, location=st) -> None:
                 st.session_state.pop("app_advanced_result", None)
                 st.session_state.pop("app_model_lab_result", None)
                 st.session_state["app_show_model"] = False
+                st.session_state["app_show_help"] = False
             except ValueError as exc:
                 location.error(str(exc))
             else:
@@ -1177,7 +1204,7 @@ def prewhitening_controls(prefix: str, location=st) -> None:
     if cols[1].button("Show model", use_container_width=True, key=f"{prefix}_show_model"):
         st.session_state["app_show_model"] = True
         st.rerun()
-    location.checkbox("Show model and O-C errors", value=True, key=f"{prefix}_show_model_errors")
+    location.checkbox("Show errors", value=True, key=f"{prefix}_show_model_errors")
     if cols[2].button("Clear chain", use_container_width=True, key=f"{prefix}_clear_chain"):
         st.session_state["app_prewhitening_periods"] = []
         st.session_state["app_show_model"] = False
@@ -1265,7 +1292,7 @@ def advanced_controls(prefix: str, location=st) -> None:
         st.session_state[f"{prefix}_advanced_metric"] = "WWZ"
         location.number_input("WWZ decay", min_value=0.0001, value=st.session_state.get(f"{prefix}_advanced_wwz_decay", 0.0125), step=0.0025, format="%.5f", key=f"{prefix}_advanced_wwz_decay")
     show_track = location.checkbox("Show best period track", value=True, key=f"{prefix}_advanced_track")
-    if location.button("Run advanced map", use_container_width=True, key=f"{prefix}_run_advanced"):
+    if location.button("Build tomogram", use_container_width=True, key=f"{prefix}_run_advanced"):
         if not result:
             location.error("Run an analysis first.")
         else:
@@ -1453,11 +1480,20 @@ def model_lab_controls(prefix: str, location=st) -> None:
         location.number_input("Display phase bins", min_value=4, max_value=120, value=st.session_state.get(f"{prefix}_model_lab_bh_bins", 24), key=f"{prefix}_model_lab_bh_bins")
         cols = location.columns(2)
         cols[0].number_input("Initial/fixed eccentricity", min_value=0.0, max_value=0.9, value=st.session_state.get(f"{prefix}_model_lab_bh_eccentricity", 0.3), step=0.05, format="%.3f", key=f"{prefix}_model_lab_bh_eccentricity")
-        cols[1].number_input("v_wind / v_orb", min_value=0.05, max_value=20.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_speed_ratio", 3.0), step=0.1, format="%.3f", key=f"{prefix}_model_lab_bh_wind_speed_ratio")
+        wind_mode = location.radio("Wind speed input", ["v_inf [km/s]", "v_wind / v_orb"], horizontal=True, key=f"{prefix}_model_lab_bh_wind_input_label")
+        st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] = "ratio" if wind_mode == "v_wind / v_orb" else "v_inf"
+        if st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] == "ratio":
+            cols[1].number_input("v_wind / v_orb", min_value=0.05, max_value=20.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_speed_ratio", 3.0), step=0.1, format="%.3f", key=f"{prefix}_model_lab_bh_wind_speed_ratio")
+        else:
+            cols[1].number_input("v_inf [km/s]", min_value=1.0, max_value=5000.0, value=st.session_state.get(f"{prefix}_model_lab_bh_vinf", 1000.0), step=50.0, format="%.1f", key=f"{prefix}_model_lab_bh_vinf")
+            physical_cols = location.columns(3)
+            physical_cols[0].number_input("Donor mass [Msun]", min_value=0.1, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_mass", 18.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_mass")
+            physical_cols[1].number_input("Compact mass [Msun]", min_value=0.1, max_value=50.0, value=st.session_state.get(f"{prefix}_model_lab_bh_compact_mass", 1.4), step=0.1, format="%.2f", key=f"{prefix}_model_lab_bh_compact_mass")
+            physical_cols[2].number_input("Donor radius [Rsun]", min_value=0.1, max_value=200.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_radius", 8.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_radius")
         location.number_input("Wind beta", min_value=0.0, max_value=5.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_beta", 0.8), step=0.1, format="%.2f", key=f"{prefix}_model_lab_bh_wind_beta")
         cols = location.columns(3)
         cols[0].checkbox("Fit eccentricity", value=st.session_state.get(f"{prefix}_model_lab_bh_fit_eccentricity", True), key=f"{prefix}_model_lab_bh_fit_eccentricity")
-        cols[1].checkbox("Fit wind speed", value=st.session_state.get(f"{prefix}_model_lab_bh_fit_wind_speed", True), key=f"{prefix}_model_lab_bh_fit_wind_speed")
+        cols[1].checkbox("Fit wind speed", value=st.session_state.get(f"{prefix}_model_lab_bh_fit_wind_speed", True), disabled=st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] == "v_inf", key=f"{prefix}_model_lab_bh_fit_wind_speed")
         cols[2].checkbox("Fit phase lag", value=st.session_state.get(f"{prefix}_model_lab_bh_phase_lag", True), key=f"{prefix}_model_lab_bh_phase_lag")
         location.checkbox(
             "Show full data set with model",
@@ -1471,7 +1507,12 @@ def model_lab_controls(prefix: str, location=st) -> None:
                 "model_lab_bh_t0": str(st.session_state.get(f"{prefix}_model_lab_bh_t0", "")).strip(),
                 "model_lab_bh_bins": str(st.session_state.get(f"{prefix}_model_lab_bh_bins", 24)),
                 "model_lab_bh_eccentricity": str(st.session_state.get(f"{prefix}_model_lab_bh_eccentricity", 0.3)),
+                "model_lab_bh_wind_input_mode": st.session_state.get(f"{prefix}_model_lab_bh_wind_input_mode", "v_inf"),
                 "model_lab_bh_wind_speed_ratio": str(st.session_state.get(f"{prefix}_model_lab_bh_wind_speed_ratio", 3.0)),
+                "model_lab_bh_vinf": str(st.session_state.get(f"{prefix}_model_lab_bh_vinf", 1000.0)),
+                "model_lab_bh_donor_mass": str(st.session_state.get(f"{prefix}_model_lab_bh_donor_mass", 18.0)),
+                "model_lab_bh_compact_mass": str(st.session_state.get(f"{prefix}_model_lab_bh_compact_mass", 1.4)),
+                "model_lab_bh_donor_radius": str(st.session_state.get(f"{prefix}_model_lab_bh_donor_radius", 8.0)),
                 "model_lab_bh_wind_beta": str(st.session_state.get(f"{prefix}_model_lab_bh_wind_beta", 0.8)),
                 "model_lab_bh_fit_eccentricity": "true" if st.session_state.get(f"{prefix}_model_lab_bh_fit_eccentricity", True) else "false",
                 "model_lab_bh_fit_wind_speed": "true" if st.session_state.get(f"{prefix}_model_lab_bh_fit_wind_speed", True) else "false",
@@ -1710,10 +1751,20 @@ def render_bondi_hoyle_highlight(model_result: dict, app_result: dict) -> None:
         f"<strong>Orbital period:</strong> {float(model_result.get('period', 0.0)):.6g} {period_unit}",
         f"<strong>T0 / periastron epoch:</strong> {float(model_result.get('t0', 0.0)):.6g} {time_unit}",
         f"<strong>Eccentricity:</strong> {float(summary.get('eccentricity', 0.0)):.4g}",
-        f"<strong>v_wind / v_orb:</strong> {float(summary.get('wind_speed_ratio', 0.0)):.4g}",
+        f"<strong>Effective v_wind / v_orb:</strong> {float(summary.get('wind_speed_ratio', 0.0)):.4g}",
         f"<strong>Wind beta:</strong> {float(summary.get('wind_beta', 0.0)):.4g}",
         f"<strong>Phase lag:</strong> {float(summary.get('phase_lag', 0.0)):+.5g}",
     ]
+    if summary.get("wind_input_mode") == "v_inf":
+        lines.extend([
+            f"<strong>v_inf:</strong> {float(summary.get('v_inf_km_s', 0.0)):.5g} km/s",
+            f"<strong>Masses:</strong> M_donor={float(summary.get('donor_mass_msun', 0.0)):.5g} Msun, M_compact={float(summary.get('compact_mass_msun', 0.0)):.5g} Msun",
+            f"<strong>Donor radius:</strong> {float(summary.get('donor_radius_rsun', 0.0)):.5g} Rsun",
+            f"<strong>Semi-major axis:</strong> {float(summary.get('semi_major_axis_rsun', 0.0)):.5g} Rsun",
+            f"<strong>Orbital speed scale:</strong> {float(summary.get('orbital_speed_km_s', 0.0)):.5g} km/s",
+        ])
+        if summary.get("radius_periastron_fraction") is not None:
+            lines.append(f"<strong>R_donor / r_periastron:</strong> {float(summary.get('radius_periastron_fraction', 0.0)):.5g}")
     if maxima:
         lines.append(f"<strong>Model accretion maximum phase:</strong> {float(maxima[0].get('phase', 0.0)):.5g}")
     if summary.get("scale") is not None:
@@ -1966,8 +2017,13 @@ def layout_one() -> None:
             advanced_controls(prefix, st)
         with st.expander("Model Laboratory", expanded=False):
             model_lab_controls(prefix, st)
-        st.markdown(help_link())
+        if st.button("Help", use_container_width=True, key=f"{prefix}_show_help"):
+            st.session_state["app_show_help"] = True
+            st.rerun()
     result = st.session_state.get("app_result")
+    if st.session_state.get("app_show_help", False):
+        render_help_document()
+        return
     render_file_preview(prefix)
     render_search_outputs(result)
     render_secondary_outputs(result)
