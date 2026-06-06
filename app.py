@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import io
 import json
 import os
@@ -22,6 +23,7 @@ import matplotlib
 matplotlib.use(os.environ.get("MPLBACKEND", "Agg"))
 import matplotlib.pyplot as plt
 import numpy as np
+from astropy.io import fits
 from astropy.timeseries import LombScargle
 from scipy.optimize import least_squares, minimize_scalar
 from scipy.signal import find_peaks
@@ -46,7 +48,8 @@ class PeakSummary:
     period_p84: float | None = None
 
 
-ALLOWED_UPLOAD_EXTENSIONS = {"", ".txt", ".dat"}
+ALLOWED_UPLOAD_EXTENSIONS = {"", ".txt", ".dat", ".fits", ".fit", ".fts", ".ftz", ".lc", ".gz"}
+FITS_UPLOAD_EXTENSIONS = (".fits", ".fit", ".fts", ".ftz", ".fits.gz")
 ALLOWED_ASCII_CONTROLS = {9, 10, 12, 13}
 SUSPICIOUS_SHELL_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
@@ -81,10 +84,44 @@ def is_numeric_table_row(line: str) -> bool:
     return True
 
 
+def is_fits_upload(filename: str, raw: bytes | None = None) -> bool:
+    lower_name = (filename or "").lower()
+    if raw:
+        if raw.startswith(b"SIMPLE  "):
+            return True
+        if raw.startswith(b"\x1f\x8b"):
+            try:
+                return gzip.decompress(raw[:4096]).startswith(b"SIMPLE  ")
+            except (OSError, EOFError):
+                try:
+                    return fits_payload(raw).startswith(b"SIMPLE  ")
+                except ValueError:
+                    return False
+    return lower_name.endswith(FITS_UPLOAD_EXTENSIONS)
+
+
+def fits_payload(raw: bytes) -> bytes:
+    if raw.startswith(b"\x1f\x8b"):
+        try:
+            return gzip.decompress(raw)
+        except OSError as exc:
+            raise ValueError("Compressed FITS upload could not be decompressed") from exc
+    return raw
+
+
 def validate_upload(filename: str, raw: bytes) -> str:
     suffix = Path(filename or "").suffix.lower()
+    if is_fits_upload(filename, raw):
+        try:
+            with fits.open(io.BytesIO(fits_payload(raw)), memmap=False):
+                pass
+        except Exception as exc:
+            raise ValueError("Uploaded FITS file could not be opened") from exc
+        return ""
+    if suffix == ".gz" and not (filename or "").lower().endswith(".fits.gz"):
+        raise ValueError("Only .fits.gz compressed FITS files are supported")
     if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
-        allowed = ".txt, .dat, or no extension"
+        allowed = ".txt, .dat, .lc, FITS files by content, or no extension"
         raise ValueError(f"Unsupported file extension '{suffix or '(none)'}'; expected {allowed}")
     if not raw:
         raise ValueError("Uploaded file is empty")
@@ -118,13 +155,109 @@ def validate_upload(filename: str, raw: bytes) -> str:
     return text
 
 
+def fits_table_metadata(raw: bytes) -> list[dict]:
+    rows: list[dict] = []
+    try:
+        hdul = fits.open(io.BytesIO(fits_payload(raw)), memmap=False)
+    except Exception as exc:
+        raise ValueError("Uploaded FITS file could not be opened") from exc
+    with hdul:
+        for idx, hdu in enumerate(hdul):
+            data = getattr(hdu, "data", None)
+            columns = getattr(hdu, "columns", None)
+            if data is None or columns is None or not hasattr(columns, "names"):
+                continue
+            numeric_columns = []
+            for column in columns:
+                name = column.name
+                try:
+                    values = np.asarray(data[name])
+                except Exception:
+                    continue
+                if values.ndim != 1 or not np.issubdtype(values.dtype, np.number):
+                    continue
+                numeric_columns.append(
+                    {
+                        "name": str(name),
+                        "format": str(getattr(column, "format", "")),
+                        "unit": "" if getattr(column, "unit", None) is None else str(column.unit),
+                    }
+                )
+            if numeric_columns:
+                extname = str(hdu.header.get("EXTNAME", "")).strip()
+                label = f"{idx}: {extname}" if extname else f"{idx}: {hdu.__class__.__name__}"
+                rows.append(
+                    {
+                        "index": idx,
+                        "name": extname or hdu.__class__.__name__,
+                        "label": label,
+                        "n_rows": int(len(data)),
+                        "columns": numeric_columns,
+                    }
+                )
+    if not rows:
+        raise ValueError("FITS file does not contain a table extension with scalar numeric columns")
+    return rows
+
+
+def read_fits_columns(
+    raw: bytes,
+    extension: int,
+    time_column: str,
+    flux_column: str,
+    error_column: str | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    try:
+        hdul = fits.open(io.BytesIO(fits_payload(raw)), memmap=False)
+    except Exception as exc:
+        raise ValueError("Uploaded FITS file could not be opened") from exc
+    with hdul:
+        if extension < 0 or extension >= len(hdul):
+            raise ValueError(f"FITS extension {extension} is outside the available range")
+        data = getattr(hdul[extension], "data", None)
+        if data is None:
+            raise ValueError(f"FITS extension {extension} does not contain table data")
+        names = set(data.names or [])
+        required = [time_column, flux_column]
+        if error_column:
+            required.append(error_column)
+        missing = [name for name in required if name not in names]
+        if missing:
+            raise ValueError("FITS column not found: " + ", ".join(missing))
+        t = np.asarray(data[time_column], dtype=float)
+        y = np.asarray(data[flux_column], dtype=float)
+        if t.ndim != 1 or y.ndim != 1:
+            raise ValueError("FITS time and flux columns must be scalar one-dimensional columns")
+        if error_column:
+            dy = np.asarray(data[error_column], dtype=float)
+            if dy.ndim != 1:
+                raise ValueError("FITS error column must be a scalar one-dimensional column")
+            good = np.isfinite(t) & np.isfinite(y) & np.isfinite(dy) & (dy > 0)
+        else:
+            dy = np.ones_like(y, dtype=float)
+            good = np.isfinite(t) & np.isfinite(y)
+        if good.sum() < 10:
+            raise ValueError("Need at least 10 valid FITS rows after filtering finite values")
+        t, y, dy = t[good], y[good], dy[good]
+        order = np.argsort(t)
+        return t[order], y[order], dy[order]
+
+
 def read_columns(
     raw: bytes,
     filename: str,
     time_col: int,
     flux_col: int,
     error_col: int | None,
+    fits_extension: int | None = None,
+    fits_time_col: str | None = None,
+    fits_flux_col: str | None = None,
+    fits_error_col: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if is_fits_upload(filename, raw):
+        if fits_extension is None or not fits_time_col or not fits_flux_col:
+            raise ValueError("Choose a FITS table extension and time/flux columns before running the analysis")
+        return read_fits_columns(raw, int(fits_extension), fits_time_col, fits_flux_col, fits_error_col)
     text = validate_upload(filename, raw)
     numeric_text = "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith(COMMENT_PREFIXES)
@@ -2043,6 +2176,12 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     flux_col = int(fields.get("flux_col", "2")) - 1
     error_col_raw = fields.get("error_col", "3").strip().lower()
     error_col = None if error_col_raw in {"", "none", "0", "no"} else int(error_col_raw) - 1
+    fits_extension_raw = fields.get("fits_extension", "").strip()
+    fits_extension = int(fits_extension_raw) if fits_extension_raw else None
+    fits_time_col = fields.get("fits_time_col", "").strip() or None
+    fits_flux_col = fields.get("fits_flux_col", "").strip() or None
+    fits_error_col_raw = fields.get("fits_error_col", "").strip()
+    fits_error_col = None if fits_error_col_raw.lower() in {"", "none", "0", "no"} else fits_error_col_raw
     fmin = float(fields.get("fmin", "0.01"))
     fmax = float(fields.get("fmax", "1.0"))
     samples_per_peak = float(fields.get("samples_per_peak", "10"))
@@ -2059,9 +2198,19 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     labels = unit_labels(fields.get("time_unit", "days"))
     fit_method = normalize_fit_method(fields.get("model_fit_method", "standard"))
     flux_is_magnitude = str(fields.get("flux_is_magnitude", "")).strip().lower() in {"1", "true", "yes", "on"}
-    t, y, dy = read_columns(file_bytes, filename, time_col, flux_col, error_col)
+    t, y, dy = read_columns(
+        file_bytes,
+        filename,
+        time_col,
+        flux_col,
+        error_col,
+        fits_extension=fits_extension,
+        fits_time_col=fits_time_col,
+        fits_flux_col=fits_flux_col,
+        fits_error_col=fits_error_col,
+    )
     t, y, dy = apply_data_limits(t, y, dy, fields)
-    has_error_column = error_col is not None
+    has_error_column = fits_error_col is not None if is_fits_upload(filename, file_bytes) else error_col is not None
     y_offset = weighted_median(y, 1.0 / dy**2)
     y_analysis = y - y_offset
     t0_raw = fields.get("t0", "").strip()

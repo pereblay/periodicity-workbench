@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from app import advanced_time_frequency_map, binary_model_lab, bondi_hoyle_model_lab, fourier_model_lab, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
+from app import advanced_time_frequency_map, binary_model_lab, bondi_hoyle_model_lab, fits_table_metadata, fourier_model_lab, is_fits_upload, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
 
 
 st.set_page_config(
@@ -147,6 +147,107 @@ def apply_flux_axis(fig: go.Figure, result: dict | None = None, row: int | None 
             fig.update_yaxes(autorange="reversed")
 
 
+def selected_fits_columns(prefix: str) -> tuple[int | None, str | None, str | None, str | None]:
+    extension = st.session_state.get(f"{prefix}_fits_extension")
+    time_col = st.session_state.get(f"{prefix}_fits_time_col")
+    flux_col = st.session_state.get(f"{prefix}_fits_flux_col")
+    use_error = bool(st.session_state.get(f"{prefix}_use_error", True))
+    error_col = st.session_state.get(f"{prefix}_fits_error_col") if use_error else None
+    if extension is None or not time_col or not flux_col:
+        return None, None, None, None
+    if error_col in {"", "None"}:
+        error_col = None
+    return int(extension), str(time_col), str(flux_col), None if error_col is None else str(error_col)
+
+
+def selected_light_curve(
+    file_bytes: bytes,
+    filename: str,
+    prefix: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if is_fits_upload(filename, file_bytes):
+        extension, time_col, flux_col, error_col = selected_fits_columns(prefix)
+        return read_columns(
+            file_bytes,
+            filename,
+            0,
+            1,
+            None,
+            fits_extension=extension,
+            fits_time_col=time_col,
+            fits_flux_col=flux_col,
+            fits_error_col=error_col,
+        )
+    time_col = int(st.session_state.get(f"{prefix}_time_col", 1)) - 1
+    flux_col = int(st.session_state.get(f"{prefix}_flux_col", 2)) - 1
+    use_error = bool(st.session_state.get(f"{prefix}_use_error", True))
+    error_col = int(st.session_state.get(f"{prefix}_error_col", 3)) - 1 if use_error else None
+    return read_columns(file_bytes, filename, time_col, flux_col, error_col)
+
+
+def preferred_fits_column(columns: list[str], keywords: list[str], fallback_index: int = 0) -> str:
+    upper_map = {column.upper(): column for column in columns}
+    for keyword in keywords:
+        if keyword.upper() in upper_map:
+            return upper_map[keyword.upper()]
+    for keyword in keywords:
+        for column in columns:
+            if keyword.upper() in column.upper():
+                return column
+    return columns[min(fallback_index, len(columns) - 1)]
+
+
+def render_fits_selector(prefix: str, file_bytes: bytes, filename: str) -> None:
+    if not is_fits_upload(filename, file_bytes):
+        return
+    metadata = fits_table_metadata(file_bytes)
+    st.caption("FITS table selection")
+    extension_options = [row["index"] for row in metadata]
+    extension_by_index = {row["index"]: row for row in metadata}
+    current_extension = st.session_state.get(f"{prefix}_fits_extension")
+    if current_extension not in extension_options:
+        current_extension = extension_options[0]
+        st.session_state[f"{prefix}_fits_extension"] = current_extension
+    selected_extension = st.selectbox(
+        "FITS extension",
+        options=extension_options,
+        index=extension_options.index(current_extension),
+        format_func=lambda idx: f"{extension_by_index[idx]['label']} ({extension_by_index[idx]['n_rows']} rows)",
+        key=f"{prefix}_fits_extension",
+    )
+    selected_meta = extension_by_index[int(selected_extension)]
+    column_rows = selected_meta["columns"]
+    column_names = [row["name"] for row in column_rows]
+    for key_suffix, keywords, fallback in [
+        ("fits_time_col", ["TIME", "MJD", "JD", "BJD"], 0),
+        ("fits_flux_col", ["RATE", "COUNT_RATE", "FLUX", "MAG", "COUNTS"], 1),
+        ("fits_error_col", ["ERROR", "ERR", "RATE_ERR", "FLUX_ERR", "MAG_ERR", "SIGMA"], 2),
+    ]:
+        key = f"{prefix}_{key_suffix}"
+        if st.session_state.get(key) not in column_names:
+            st.session_state[key] = preferred_fits_column(column_names, keywords, fallback)
+    cols = st.columns(3)
+    cols[0].selectbox("Time column", options=column_names, key=f"{prefix}_fits_time_col")
+    cols[1].selectbox("Flux column", options=column_names, key=f"{prefix}_fits_flux_col")
+    error_options = ["None"] + column_names
+    error_value = st.session_state.get(f"{prefix}_fits_error_col", "None")
+    if error_value not in error_options:
+        error_value = "None"
+    cols[2].selectbox(
+        "Error column",
+        options=error_options,
+        index=error_options.index(error_value),
+        disabled=not bool(st.session_state.get(f"{prefix}_use_error", True)),
+        key=f"{prefix}_fits_error_col",
+    )
+    st.dataframe(
+        pd.DataFrame(column_rows),
+        use_container_width=True,
+        hide_index=True,
+        height=180,
+    )
+
+
 def suggested_frequency_range_from_bytes(file_bytes: bytes | None, time_column: int, time_unit: str = "days") -> tuple[float, float, str] | None:
     if file_bytes is None:
         return None
@@ -185,7 +286,19 @@ def suggested_frequency_range(uploaded_file, time_column: int, time_unit: str = 
     return suggested_frequency_range_from_bytes(None if uploaded_file is None else uploaded_file.getvalue(), time_column, time_unit)
 
 
-def file_preview_dataframe(file_bytes: bytes, filename: str, max_rows: int = 12) -> pd.DataFrame:
+def file_preview_dataframe(file_bytes: bytes, filename: str, prefix: str, max_rows: int = 12) -> pd.DataFrame:
+    if is_fits_upload(filename, file_bytes):
+        extension, time_col, flux_col, error_col = selected_fits_columns(prefix)
+        if extension is None or time_col is None or flux_col is None:
+            return pd.DataFrame()
+        time, flux, error = selected_light_curve(file_bytes, filename, prefix)
+        data = {
+            str(time_col): time[:max_rows],
+            str(flux_col): flux[:max_rows],
+        }
+        if error_col is not None:
+            data[str(error_col)] = error[:max_rows]
+        return pd.DataFrame(data)
     text = validate_upload(filename, file_bytes)
     rows = [
         line
@@ -207,11 +320,8 @@ def raw_preview_figure(
     filename: str,
     prefix: str,
 ) -> go.Figure:
-    time_col = int(st.session_state.get(f"{prefix}_time_col", 1)) - 1
-    flux_col = int(st.session_state.get(f"{prefix}_flux_col", 2)) - 1
     use_error = bool(st.session_state.get(f"{prefix}_use_error", True))
-    error_col = int(st.session_state.get(f"{prefix}_error_col", 3)) - 1 if use_error else None
-    time, flux, error = read_columns(file_bytes, filename, time_col, flux_col, error_col)
+    time, flux, error = selected_light_curve(file_bytes, filename, prefix)
     good = np.ones_like(time, dtype=bool)
     for name, op in [("xmin", np.greater_equal), ("xmax", np.less_equal)]:
         value = optional_state_float(prefix, name)
@@ -906,6 +1016,12 @@ def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dic
         fields["fold_fit_periods"] = ",".join(f"{p:.12g}" for p in periods)
     if excluded:
         fields["excluded_periods"] = ",".join(f"{p:.12g}" for p in excluded)
+    fits_extension, fits_time_col, fits_flux_col, fits_error_col = selected_fits_columns(prefix)
+    if fits_extension is not None:
+        fields["fits_extension"] = str(fits_extension)
+        fields["fits_time_col"] = fits_time_col or ""
+        fields["fits_flux_col"] = fits_flux_col or ""
+        fields["fits_error_col"] = fits_error_col or ""
     chain = st.session_state.get("app_prewhitening_periods", [])
     if chain:
         fields["prewhiten_periods"] = ",".join(f"{p:.12g}" for p in chain)
@@ -925,7 +1041,7 @@ def input_controls(prefix: str, location=st) -> None:
     if "app_upload_key" not in st.session_state:
         st.session_state["app_upload_key"] = 0
     uploaded = location.file_uploader(
-        "Text table (.txt, .dat, or no extension)",
+        "Text table or FITS (.txt, .dat, .lc, FITS by content, or no extension)",
         type=None,
         accept_multiple_files=False,
         key=f"app_upload_{st.session_state['app_upload_key']}",
@@ -946,10 +1062,15 @@ def input_controls(prefix: str, location=st) -> None:
                 st.session_state[f"{prefix}_frequency_suggestion"] = suggestion
         st.session_state["app_file_bytes"] = uploaded.getvalue()
         st.session_state["app_filename"] = uploaded.name
-    cols = location.columns(3)
-    cols[0].number_input("Time", min_value=1, value=st.session_state.get(f"{prefix}_time_col", 1), key=f"{prefix}_time_col")
-    cols[1].number_input("Flux", min_value=1, value=st.session_state.get(f"{prefix}_flux_col", 2), key=f"{prefix}_flux_col")
-    cols[2].number_input("Error", min_value=1, value=st.session_state.get(f"{prefix}_error_col", 3), key=f"{prefix}_error_col")
+    current_bytes = st.session_state.get("app_file_bytes")
+    current_filename = st.session_state.get("app_filename", "")
+    if current_bytes is not None and is_fits_upload(current_filename, current_bytes):
+        location.caption("FITS extension and column selectors are shown in the workspace preview.")
+    else:
+        cols = location.columns(3)
+        cols[0].number_input("Time", min_value=1, value=st.session_state.get(f"{prefix}_time_col", 1), key=f"{prefix}_time_col")
+        cols[1].number_input("Flux", min_value=1, value=st.session_state.get(f"{prefix}_flux_col", 2), key=f"{prefix}_flux_col")
+        cols[2].number_input("Error", min_value=1, value=st.session_state.get(f"{prefix}_error_col", 3), key=f"{prefix}_error_col")
     option_cols = location.columns([0.40, 0.30, 0.30])
     option_cols[0].selectbox(
         "Time units",
@@ -1003,11 +1124,21 @@ def input_controls(prefix: str, location=st) -> None:
 
 def search_controls(prefix: str, location=st) -> None:
     time_unit = st.session_state.get(f"{prefix}_time_unit", "days")
-    suggestion = suggested_frequency_range_from_bytes(
-        st.session_state.get("app_file_bytes"),
-        int(st.session_state.get(f"{prefix}_time_col", 1)),
-        time_unit,
-    )
+    suggestion = None
+    file_bytes = st.session_state.get("app_file_bytes")
+    filename = st.session_state.get("app_filename", "")
+    if file_bytes is not None and is_fits_upload(filename, file_bytes):
+        try:
+            time, _, _ = selected_light_curve(file_bytes, filename, prefix)
+            suggestion = suggested_frequency_range_from_time(time, time_unit)
+        except ValueError:
+            suggestion = None
+    else:
+        suggestion = suggested_frequency_range_from_bytes(
+            file_bytes,
+            int(st.session_state.get(f"{prefix}_time_col", 1)),
+            time_unit,
+        )
     if suggestion is None and st.session_state.get("app_result"):
         suggestion = suggested_frequency_range_from_time(st.session_state["app_result"]["series"]["time"], time_unit)
     if suggestion is not None:
@@ -1631,16 +1762,19 @@ def render_file_preview(prefix: str) -> None:
     if "app_file_bytes" not in st.session_state:
         return
     st.subheader("Uploaded data preview")
-    preview_cols = st.columns([1, 2])
     try:
-        preview = file_preview_dataframe(st.session_state["app_file_bytes"], st.session_state["app_filename"])
+        file_bytes = st.session_state["app_file_bytes"]
+        filename = st.session_state["app_filename"]
+        render_fits_selector(prefix, file_bytes, filename)
+        preview_cols = st.columns([1, 2])
+        preview = file_preview_dataframe(file_bytes, filename, prefix)
         if not preview.empty:
             with preview_cols[0]:
                 st.caption("File preview")
                 st.dataframe(preview, use_container_width=True, hide_index=True, height=300)
         with preview_cols[1]:
             st.plotly_chart(
-                raw_preview_figure(st.session_state["app_file_bytes"], st.session_state["app_filename"], prefix),
+                raw_preview_figure(file_bytes, filename, prefix),
                 use_container_width=True,
             )
     except ValueError as exc:

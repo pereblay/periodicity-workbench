@@ -19,9 +19,11 @@ The tool is intentionally exploratory. It can help identify candidate periods, a
 
 ## Input
 
-The input file must be a plain ASCII table with numeric columns. The app accepts files with `.txt`, `.dat`, or no extension. Comment lines beginning with `#` or `%` are ignored.
+The input file can be either a plain ASCII table with numeric columns or a FITS table. The app accepts text files with `.txt`, `.dat`, `.lc`, or no extension. FITS files are detected from their content, so common extensions such as `.fits`, `.fit`, `.fts`, `.ftz`, `.lc`, or compressed FITS-like uploads can be used as long as the file contains a valid FITS payload. In text files, comment lines beginning with `#` or `%` are ignored.
 
-The app rejects files containing non-ASCII bytes, control characters, or command-like text. This is a basic safety check intended to avoid treating executable or shell-like content as a data file.
+For ASCII uploads, the app rejects files containing non-ASCII bytes, control characters, or command-like text. This is a basic safety check intended to avoid treating executable or shell-like content as a data file. FITS uploads are opened with `astropy.io.fits` and only scalar numeric table columns are offered for analysis.
+
+When a FITS file is uploaded, the workspace preview shows the available table extensions. After selecting an extension, the app lists its scalar numeric columns and lets the user choose the time, flux, and optional error columns. The data table preview and light-curve preview are then built from that exact selection.
 
 ### Parameters
 
@@ -32,7 +34,7 @@ Column number containing the observation time.
 Column number containing the measured signal. This may be a flux, count rate, magnitude, or any scalar observable.
 
 **Error**  
-Column number containing the uncertainty on the measured signal. This can be disabled with **Use error column**.
+Column number, or FITS column name, containing the uncertainty on the measured signal. This can be disabled with **Use error column**.
 
 **Time units**  
 If set to `days`, frequencies are shown in cycles/day and periods in days. If set to `seconds`, frequencies are shown in Hz and periods in seconds.
