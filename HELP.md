@@ -162,7 +162,7 @@ Manual exclusions allow the user to prevent selected periods from being used as 
 **Exclude periods from primary selection**  
 List of detected candidate periods that can be excluded.
 
-**Additional excluded periods**  
+**User-specified period(s)**  
 Manual list of periods to exclude, separated by spaces, commas, or semicolons.
 
 **Manual exclusion tolerance**  
@@ -287,7 +287,7 @@ where `tau` is the time center, `omega` is the angular frequency, and `c` contro
 
 ### Parameters
 
-**Advanced min frequency / Advanced max frequency**  
+**Min. frequency / Max. frequency**  
 Frequency interval used for the tomography map.
 
 **Period bins**  
