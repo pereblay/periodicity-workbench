@@ -1041,7 +1041,7 @@ def input_controls(prefix: str, location=st) -> None:
     if "app_upload_key" not in st.session_state:
         st.session_state["app_upload_key"] = 0
     uploaded = location.file_uploader(
-        "Text table or FITS (.txt, .dat, .lc, FITS by content, or no extension)",
+        "ASCII or FITS file",
         type=None,
         accept_multiple_files=False,
         key=f"app_upload_{st.session_state['app_upload_key']}",
@@ -1153,19 +1153,17 @@ def search_controls(prefix: str, location=st) -> None:
             st.session_state[f"{prefix}_fmin"] = float(suggestion[0])
             st.session_state[f"{prefix}_fmax"] = float(suggestion[1])
             st.rerun()
-    else:
-        location.caption("Upload a file to estimate a frequency range from baseline and sampling.")
     cols = location.columns(2)
     frequency_label = axis_labels(time_unit)["frequency"]
     cols[0].number_input(f"Min {frequency_label}", min_value=0.0, step=0.001, format="%.6f", key=f"{prefix}_fmin", value=st.session_state.get(f"{prefix}_fmin", 0.01))
     cols[1].number_input(f"Max {frequency_label}", min_value=0.0, step=0.01, format="%.6f", key=f"{prefix}_fmax", value=st.session_state.get(f"{prefix}_fmax", 1.0))
-    cols = location.columns(2)
-    cols[0].number_input("Samples per peak", min_value=1.0, value=st.session_state.get(f"{prefix}_samples_per_peak", 10.0), step=1.0, key=f"{prefix}_samples_per_peak")
-    cols[1].number_input("Max considered peaks", min_value=1, max_value=20, value=st.session_state.get(f"{prefix}_max_peaks", 6), step=1, key=f"{prefix}_max_peaks")
-    location.number_input(f"Minimum considered {axis_labels(time_unit)['period']}", min_value=0.0, value=st.session_state.get(f"{prefix}_min_period", 2.0), step=0.1, key=f"{prefix}_min_period")
+    location.number_input("Max considered peaks", min_value=1, max_value=20, value=st.session_state.get(f"{prefix}_max_peaks", 6), step=1, key=f"{prefix}_max_peaks")
     cols = location.columns(2)
     cols[0].number_input("Sampling-window threshold", min_value=0.0, value=st.session_state.get(f"{prefix}_window_threshold", 0.01), step=0.005, format="%.4f", key=f"{prefix}_window_threshold")
     cols[1].number_input("Sampling-window tolerance", min_value=0.001, value=st.session_state.get(f"{prefix}_window_tolerance", 0.01), step=0.001, format="%.3f", key=f"{prefix}_window_tolerance")
+    cols = location.columns(2)
+    cols[0].number_input("Samples per peak", min_value=1.0, value=st.session_state.get(f"{prefix}_samples_per_peak", 10.0), step=1.0, key=f"{prefix}_samples_per_peak")
+    cols[1].number_input(f"Minimum considered {axis_labels(time_unit)['period']}", min_value=0.0, value=st.session_state.get(f"{prefix}_min_period", 2.0), step=0.1, key=f"{prefix}_min_period")
 
 
 def uncertainty_controls(prefix: str, location=st) -> None:
@@ -1194,7 +1192,7 @@ def manual_exclusion_controls(prefix: str, location=st) -> None:
         format_func=lambda period: options[period],
         key=f"{prefix}_selected_exclusions",
     )
-    manual = location.text_input(f"Additional excluded periods [{period_unit}]", key=f"{prefix}_manual_exclusions")
+    manual = location.text_input(f"User-specified period(s) [{period_unit}]", key=f"{prefix}_manual_exclusions")
     excluded = list(selected)
     if manual.strip():
         try:
@@ -1365,7 +1363,7 @@ def advanced_controls(prefix: str, location=st) -> None:
         1e-12,
     )
     cols[0].number_input(
-        f"Advanced min frequency [{frequency_unit}]",
+        f"Min. frequency [{frequency_unit}]",
         min_value=1e-12,
         value=advanced_fmin_value,
         step=0.001,
@@ -1373,7 +1371,7 @@ def advanced_controls(prefix: str, location=st) -> None:
         key=f"{prefix}_advanced_fmin",
     )
     cols[1].number_input(
-        f"Advanced max frequency [{frequency_unit}]",
+        f"Max. frequency [{frequency_unit}]",
         min_value=1e-12,
         value=advanced_fmax_value,
         step=0.01,
