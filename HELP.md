@@ -27,19 +27,19 @@ When a FITS file is uploaded, the workspace preview shows the available table ex
 
 ### Parameters
 
-**Time**  
+**Time**
 Column number containing the observation time.
 
-**Flux**  
+**Flux**
 Column number containing the measured signal. This may be a flux, count rate, magnitude, or any scalar observable.
 
-**Error**  
+**Error**
 Column number, or FITS column name, containing the uncertainty on the measured signal. This can be disabled with **Use error column**.
 
-**Time units**  
+**Time units**
 If set to `days`, frequencies are shown in cycles/day and periods in days. If set to `seconds`, frequencies are shown in Hz and periods in seconds.
 
-**Use error column**  
+**Use error column**
 When enabled, weighted fits use weights
 
 ```text
@@ -48,22 +48,15 @@ w_i = 1 / sigma_i^2
 
 where `sigma_i` is the error value. When disabled, all points are assigned equal weight.
 
-**Flux is magnitude**  
+**Flux is magnitude**
 When enabled, plots using the flux axis are displayed with an inverted vertical axis, as is customary for magnitudes.
 
-**Sinusoidal fitting**  
-This controls how simple sinusoidal models are fitted in folded profiles, prewhitening models, and some Model Laboratory blocks.
-
-**standard** uses weighted least squares.  
-**robust** uses a soft-L1 loss to reduce the effect of strong outliers.  
-**display-optimized** rescales the plotted model amplitude and offset to better match the displayed folded profile. This is useful for visual teaching, but it should not be interpreted as a strictly statistical best fit.
-
-**xmin, xmax, ymin, ymax**  
+**xmin, xmax, ymin, ymax**
 Optional limits applied before the analysis. These restrict the time and flux ranges used by the calculations.
 
 ## Frequency Search
 
-This block controls the main Lomb-Scargle analysis.
+This block controls and launches the main Lomb-Scargle analysis.
 
 For unevenly sampled data, the Lomb-Scargle periodogram is a standard way to estimate the power of a sinusoidal signal as a function of angular frequency or frequency. In this app the searched frequency is `f`, and the period is
 
@@ -81,10 +74,13 @@ where `C`, `A`, and `B` are fitted at each trial frequency.
 
 ### Parameters
 
-**Min Frequency / Max Frequency**  
+**Run analysis**
+Runs the Lomb-Scargle analysis using the current input file, selected columns, analysis limits, and frequency-search settings.
+
+**Min Frequency / Max Frequency**
 The frequency interval searched by the Lomb-Scargle periodogram. Use cycles/day when the time axis is in days, and Hz when the time axis is in seconds.
 
-**Samples per peak**  
+**Samples per peak**
 Controls how finely the frequency grid samples the expected width of periodogram peaks. A larger value gives a denser grid and smoother-looking peaks, but increases computation time.
 
 The natural frequency resolution is approximately
@@ -99,16 +95,16 @@ where `T` is the total time baseline. The number of evaluated frequencies scales
 N_f ~ (f_max - f_min) T * samples_per_peak
 ```
 
-**Max considered peaks**  
+**Max considered peaks**
 Maximum number of Lomb-Scargle peaks reported as candidates.
 
-**Minimum considered period**  
+**Minimum considered period**
 Peaks with periods shorter than this value are not considered as primary candidates. This is useful for suppressing known short-period aliases, such as daily sampling features.
 
-**Sampling-window threshold**  
+**Sampling-window threshold**
 Minimum sampling-window power required for a window peak to be considered important.
 
-**Sampling-window tolerance**  
+**Sampling-window tolerance**
 Relative tolerance used to decide whether a Lomb-Scargle peak is close enough to a sampling-window peak to be flagged as an artefact.
 
 ## Sampling Window
@@ -147,10 +143,10 @@ The reported error is based on the central percentile interval, usually the 16th
 
 ### Parameters
 
-**Bootstrap iterations**  
+**Bootstrap iterations**
 Number of bootstrap resamplings. Larger values give more stable errors but take longer. A common practical value is 1000.
 
-**Bootstrap local width**  
+**Bootstrap local width**
 Fractional search width around each candidate frequency. For example, a width of `0.03` searches within about +/-3 percent of the original frequency.
 
 ## Manual Exclusions
@@ -159,13 +155,13 @@ Manual exclusions allow the user to prevent selected periods from being used as 
 
 ### Parameters
 
-**Exclude periods from primary selection**  
+**Exclude periods from primary selection**
 List of detected candidate periods that can be excluded.
 
-**User-specified period(s)**  
+**User-specified period(s)**
 Manual list of periods to exclude, separated by spaces, commas, or semicolons.
 
-**Manual exclusion tolerance**  
+**Manual exclusion tolerance**
 Relative tolerance used to decide whether a detected period matches an excluded period.
 
 For a candidate period `P` and excluded period `P_ex`, the comparison is approximately
@@ -200,23 +196,30 @@ when errors are available.
 
 ### Parameters
 
-**Phase bins**  
+**Phase bins**
 Number of phase bins used to compute the displayed folded profile.
 
-**T0**  
+**T0**
 Reference epoch for phase zero. If left blank, the app uses the default reference from the analysis.
 
-**Folded-fit frequencies: harmonics**  
+**Folded-fit frequencies: harmonics**
 Fits the folded profile with the main period and a selected number of harmonics:
 
 ```text
 y(phi) = C + sum_k [a_k cos(2 pi k phi) + b_k sin(2 pi k phi)]
 ```
 
-**Folded-fit frequencies: selected**  
+**Folded-fit frequencies: selected**
 Allows selected detected periods to be included in the folded model. The first selected period is used as the folding period, while the others enter the fitted model as additional frequencies.
 
-**Update folded profile**  
+**Sinusoidal fitting**
+Controls how simple sinusoidal models are fitted in folded profiles. The same stored choice is also used as the default for related sinusoidal fits in prewhitening and some Model Laboratory blocks.
+
+**standard** uses weighted least squares.
+**robust** uses a soft-L1 loss to reduce the effect of strong outliers.
+**display-optimized** rescales the plotted model amplitude and offset to better match the displayed folded profile. This is useful for visual teaching, but it should not be interpreted as a strictly statistical best fit.
+
+**Update folded profile**
 Recomputes only the folded profile without rerunning the full Lomb-Scargle analysis.
 
 ## Iterative Prewhitening
@@ -239,22 +242,22 @@ The residuals are searched again with Lomb-Scargle using the same frequency rang
 
 ### Parameters
 
-**Next period to remove**  
+**Next period to remove**
 Detected period selected for the next prewhitening step.
 
-**Manual period for next step**  
+**Manual period for next step**
 Manual period entered by the user. If provided, it overrides the dropdown selection.
 
-**Next step**  
+**Next step**
 Adds the selected period to the prewhitening chain and recomputes the residual periodogram.
 
-**Show model**  
+**Show model**
 Displays the original data, the prewhitening model evaluated at the data points, a full continuous model, and the O-C residuals.
 
-**Show model and O-C errors**  
+**Show model and O-C errors**
 Toggles error bars in the model and residual plots.
 
-**Clear chain**  
+**Clear chain**
 Removes all prewhitening steps and restores the analysis without prewhitening.
 
 ## Period Tomography
@@ -287,37 +290,37 @@ where `tau` is the time center, `omega` is the angular frequency, and `c` contro
 
 ### Parameters
 
-**Min. frequency / Max. frequency**  
+**Min. frequency / Max. frequency**
 Frequency interval used for the tomography map.
 
-**Period bins**  
+**Period bins**
 Number of period values displayed in the map.
 
-**Window width**  
+**Window width**
 Width of each sliding time window.
 
-**Window step**  
+**Window step**
 Spacing between consecutive window centers.
 
-**Minimum points per window**  
+**Minimum points per window**
 Windows with fewer points are skipped.
 
-**Color metric**  
+**Color metric**
 For v1, color can represent Lomb-Scargle power or fitted amplitude.
 
-**Keep best-period track near a detected period**  
+**Keep best-period track near a detected period**
 Restricts the displayed best-period track to a region around a selected period. This is useful when the global strongest peak jumps to aliases or sampling features.
 
-**Track reference period**  
+**Track reference period**
 Detected period around which the best-period track is constrained.
 
-**Track half-width**  
+**Track half-width**
 Allowed fractional period range around the selected reference period.
 
-**WWZ decay**  
+**WWZ decay**
 Controls the localization of the WWZ transform. Larger values give more local time resolution but poorer frequency resolution.
 
-**Show best period track**  
+**Show best period track**
 Displays or hides the best-period curve on top of the map.
 
 ## Model Laboratory
@@ -336,16 +339,16 @@ It is useful for non-sinusoidal but strictly periodic shapes, such as asymmetric
 
 ### Parameters
 
-**Model period**  
+**Model period**
 Period used to fold the data and define phase.
 
-**T0**  
+**T0**
 Reference epoch for phase zero.
 
-**Display phase bins**  
+**Display phase bins**
 Number of bins used in the displayed folded profile.
 
-**Harmonic selection**  
+**Harmonic selection**
 Manual uses the selected number of harmonics. AIC and BIC test several harmonic orders and choose the one with the best information criterion.
 
 The information criteria are approximately
@@ -357,16 +360,16 @@ BIC = n ln(RSS/n) + k ln(n)
 
 where `n` is the number of points, `k` is the number of free parameters, and `RSS` is the residual sum of squares.
 
-**Manual harmonics**  
+**Manual harmonics**
 Number of harmonics fitted when manual selection is active.
 
-**Max harmonics for AIC/BIC**  
+**Max harmonics for AIC/BIC**
 Maximum harmonic order tested by automatic selection.
 
-**Fourier fit method**  
+**Fourier fit method**
 Least-squares method used for the Fourier coefficients.
 
-**Show full data set with model**  
+**Show full data set with model**
 Displays the model in the original time domain.
 
 ## Eclipsing / Eccentric Binary Models
@@ -405,34 +408,93 @@ where `d(phi, phi_i)` is the circular phase distance from eclipse center.
 
 The depth ratio and width ratio are useful pedagogically. They may suggest brightness or size contrasts, but they do not by themselves determine mass ratio, radius ratio, or inclination without a physical binary model and external constraints.
 
+### Physical Eclipse Toy Model
+
+The physical eclipse toy model is a deliberately simplified alternative to full binary-light-curve solvers such as PHOEBE or ellc. It is intended for teaching: students can change physical parameters and immediately see how the folded profile reacts.
+
+The model first uses Kepler's third law to estimate the semi-major axis:
+
+```text
+a^3 = G (M1 + M2) (P / 2 pi)^2
+```
+
+The stellar radii entered in solar radii are converted to fractional radii `R1/a` and `R2/a`. The eccentric orbit is described by
+
+```text
+r/a = (1 - e^2) / (1 + e cos nu)
+theta = nu + omega
+d_proj/a = (r/a) sqrt[cos^2(theta) + sin^2(theta) cos^2(i)]
+```
+
+where `d_proj` is the projected separation of the two stellar disks. The eclipse depth is estimated from the overlap area of two circles, scaled by a simple surface-brightness proxy:
+
+```text
+S2 / S1 ~ (T2 / T1)^4
+```
+
+The displayed fit is
+
+```text
+y(phi) = C + A Q(phi; e, omega, i, R1/a, R2/a, T2/T1, u1, u2, L3)
+```
+
+where `Q` is the geometric eclipse proxy. Optional ellipsoidal, reflection, and beaming terms can be added as simple sinusoidal proxies:
+
+```text
+Q = Q_eclipse + E cos(4 pi phi) + R cos(2 pi phi) + B sin(2 pi phi)
+```
+
+Only the vertical offset `C` and scale `A` are fitted automatically. The physical parameters are user-controlled and should be interpreted as pedagogical diagnostics unless a proper physical solver and external constraints are used.
+
 ### Parameters
 
-**Binary period**  
+**Binary period**
 Period used to fold the binary light curve.
 
-**T0 / periastron epoch**  
+**T0 / periastron epoch**
 Reference epoch. For eccentric harmonic mode, it is interpreted as a periastron epoch. For empirical eclipses, it is simply the phase-zero reference.
 
-**Display phase bins**  
+**Display phase bins**
 Number of bins used in the folded display.
 
-**Binary model**  
-Selects eccentric harmonic or empirical eclipses.
+**Binary model**
+Selects eccentric harmonic, empirical eclipses, or the physical eclipse toy model.
 
-**True-anomaly harmonics**  
+**True-anomaly harmonics**
 Number of harmonic terms in true anomaly.
 
-**Initial/fixed eccentricity**  
+**Initial/fixed eccentricity**
 Initial eccentricity if fitting is enabled, or fixed eccentricity if fitting is disabled.
 
-**Fit eccentricity**  
+**Fit eccentricity**
 Optimizes eccentricity between 0 and 0.9.
 
-**Include secondary eclipse**  
+**Include secondary eclipse**
 Adds a second eclipse component.
 
-**Primary phase guess / Secondary phase guess**  
+**Primary phase guess / Secondary phase guess**
 Optional starting phases for empirical eclipse centers.
+
+**Eccentricity / Omega / Inclination**
+Physical eclipse toy parameters controlling the orbital shape, orientation of periastron, and viewing angle.
+
+**M1 / M2**
+Component masses. They set the semi-major axis through Kepler's law and therefore change the fractional radii for fixed input radii.
+
+**R1 / R2**
+Component radii in solar radii. Larger fractional radii produce broader and more likely eclipses.
+
+**T1 / T2**
+Effective temperatures used only as a surface-brightness proxy.
+
+**u1 / u2**
+Linear limb-darkening coefficients. Larger values reduce the disk-averaged occulted surface brightness in this simplified implementation.
+
+**Third light**
+Additional constant light as a fraction of the two-star flux. It dilutes eclipse amplitudes.
+
+**Ellipsoidal / Reflection / Beaming**
+Optional teaching terms that add approximate double-wave ellipsoidal modulation, single-wave reflection modulation, and sine-like Doppler-beaming modulation.
 
 ## Bondi-Hoyle Accretion Model
 
@@ -474,49 +536,49 @@ implemented internally as a normalized ratio. The fitted parameters remain pedag
 
 ### Parameters
 
-**Orbital period**  
+**Orbital period**
 Period used to compute orbital phase.
 
-**T0 / periastron epoch**  
+**T0 / periastron epoch**
 Reference epoch for periastron.
 
-**Display phase bins**  
+**Display phase bins**
 Number of bins in the displayed folded profile.
 
-**Initial/fixed eccentricity**  
+**Initial/fixed eccentricity**
 Initial or fixed eccentricity.
 
-**Wind speed input**  
+**Wind speed input**
 Selects whether the model uses a dimensionless `v_wind / v_orb` ratio or physical wind parameters based on `v_inf`.
 
-**v_wind / v_orb**  
+**v_wind / v_orb**
 Ratio of wind speed to characteristic orbital speed. This is the original dimensionless toy-model parameter.
 
-**v_inf [km/s]**  
+**v_inf [km/s]**
 Terminal wind speed used to derive an effective `v_wind / v_orb` ratio.
 
-**Donor mass [Msun]**  
+**Donor mass [Msun]**
 Mass of the donor star used in Kepler's third law.
 
-**Compact mass [Msun]**  
+**Compact mass [Msun]**
 Mass of the compact object, usually around 1.4 Msun for a neutron star.
 
-**Donor radius [Rsun]**  
+**Donor radius [Rsun]**
 Radius used in the simple beta-law wind acceleration term.
 
-**Wind beta**  
+**Wind beta**
 Controls the simple wind acceleration law used in the toy model.
 
-**Fit eccentricity**  
+**Fit eccentricity**
 Optimizes eccentricity.
 
-**Fit wind speed**  
+**Fit wind speed**
 Optimizes the wind-speed ratio in the dimensionless mode. It is disabled in `v_inf` mode so that the user can explore how physical input parameters change the model.
 
-**Fit phase lag**  
+**Fit phase lag**
 Allows a phase offset between the simple periastron reference and the observed modulation.
 
-**Show full data set with model**  
+**Show full data set with model**
 Displays the fitted model over the full time span.
 
 ## X-ray Pulsation Timing
@@ -602,40 +664,40 @@ where `a_x` is the compact object's projected orbital semimajor axis and `i` is 
 
 ### Parameters
 
-**Pulse period**  
+**Pulse period**
 Initial period used for the pulse search.
 
-**T0**  
+**T0**
 Reference epoch for pulse phase.
 
-**Profile bins**  
+**Profile bins**
 Number of bins in the displayed pulse profile.
 
-**Profile harmonics**  
+**Profile harmonics**
 Number of Fourier harmonics used to model the pulse shape.
 
-**Epoch search half-width [%]**  
+**Epoch search half-width [%]**
 Fractional search range around the input pulse period.
 
-**Trial periods**  
+**Trial periods**
 Number of trial periods evaluated by epoch folding.
 
-**Epoch-folding bins**  
+**Epoch-folding bins**
 Number of phase bins used in the epoch-folding search.
 
-**Pulse-arrival segments**  
+**Pulse-arrival segments**
 Number of time segments used for arrival-time estimation.
 
-**Min points per segment**  
+**Min points per segment**
 Segments with fewer points are skipped.
 
-**O-C sinusoid period**  
+**O-C sinusoid period**
 Optional trial orbital period used to fit a sinusoid to the O-C values.
 
-**Pulse-shape fit method**  
+**Pulse-shape fit method**
 Least-squares method used for the pulse-profile Fourier model.
 
-**Show full data set with model**  
+**Show full data set with model**
 Displays the pulse model over the full data set.
 
 ## Interpreting Results Safely

@@ -934,6 +934,21 @@ def sampled_curve_extrema(
     return extrema
 
 
+def sampled_curve_minima(
+    phase_grid: np.ndarray,
+    values: np.ndarray,
+    kind: str = "model minimum",
+) -> list[dict[str, float | str]]:
+    peak_idx, _ = find_peaks(-values)
+    extrema = [
+        {"phase": float(phase_grid[idx]), "flux": float(values[idx]), "kind": kind}
+        for idx in peak_idx
+        if 0.0 <= phase_grid[idx] < 1.0
+    ]
+    extrema.sort(key=lambda row: row["flux"])
+    return extrema
+
+
 def fourier_model_lab(result: dict, fields: dict[str, str]) -> dict:
     series = result.get("series", {})
     t = np.asarray(series.get("time", []), dtype=float)
@@ -1231,6 +1246,144 @@ def fit_empirical_eclipse_model(
     return model, params, summary
 
 
+def disk_overlap_area(distance: np.ndarray, radius1: float, radius2: float) -> np.ndarray:
+    distance = np.asarray(distance, dtype=float)
+    radius1 = max(float(radius1), 1e-6)
+    radius2 = max(float(radius2), 1e-6)
+    area = np.zeros_like(distance, dtype=float)
+
+    separated = distance >= radius1 + radius2
+    contained = distance <= abs(radius1 - radius2)
+    area[contained] = np.pi * min(radius1, radius2) ** 2
+
+    partial = ~(separated | contained)
+    if np.any(partial):
+        d = np.maximum(distance[partial], 1e-10)
+        arg1 = np.clip((d**2 + radius1**2 - radius2**2) / (2.0 * d * radius1), -1.0, 1.0)
+        arg2 = np.clip((d**2 + radius2**2 - radius1**2) / (2.0 * d * radius2), -1.0, 1.0)
+        term = np.maximum(
+            (-d + radius1 + radius2)
+            * (d + radius1 - radius2)
+            * (d - radius1 + radius2)
+            * (d + radius1 + radius2),
+            0.0,
+        )
+        area[partial] = radius1**2 * np.arccos(arg1) + radius2**2 * np.arccos(arg2) - 0.5 * np.sqrt(term)
+    return area
+
+
+def physical_eclipse_proxy(
+    phase: np.ndarray,
+    eccentricity: float,
+    omega_deg: float,
+    inclination_deg: float,
+    radius1_over_a: float,
+    radius2_over_a: float,
+    temperature1: float,
+    temperature2: float,
+    limb_u1: float,
+    limb_u2: float,
+    third_light_fraction: float,
+    ellipsoidal_amp: float,
+    reflection_amp: float,
+    beaming_amp: float,
+    include_ellipsoidal: bool,
+    include_reflection: bool,
+    include_beaming: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    phase = np.asarray(phase, dtype=float) % 1.0
+    eccentricity = float(np.clip(eccentricity, 0.0, 0.9))
+    omega = np.deg2rad(float(omega_deg))
+    inclination = np.deg2rad(float(np.clip(inclination_deg, 0.0, 90.0)))
+    radius1_over_a = float(np.clip(radius1_over_a, 1e-4, 0.9))
+    radius2_over_a = float(np.clip(radius2_over_a, 1e-4, 0.9))
+    temperature1 = max(float(temperature1), 1.0)
+    temperature2 = max(float(temperature2), 1.0)
+    limb_u1 = float(np.clip(limb_u1, 0.0, 1.0))
+    limb_u2 = float(np.clip(limb_u2, 0.0, 1.0))
+    third_light_fraction = max(float(third_light_fraction), 0.0)
+
+    true_anomaly = true_anomaly_from_phase(phase, eccentricity)
+    separation = (1.0 - eccentricity**2) / np.maximum(1.0 + eccentricity * np.cos(true_anomaly), 1e-6)
+    theta = true_anomaly + omega
+    sin_i = np.sin(inclination)
+    cos_i = np.cos(inclination)
+    projected_separation = separation * np.sqrt(np.cos(theta) ** 2 + (np.sin(theta) * cos_i) ** 2)
+    line_of_sight = separation * sin_i * np.sin(theta)
+
+    surface1 = max(1.0 - limb_u1 / 3.0, 1e-4)
+    surface2 = (temperature2 / temperature1) ** 4 * max(1.0 - limb_u2 / 3.0, 1e-4)
+    flux1 = surface1 * np.pi * radius1_over_a**2
+    flux2 = surface2 * np.pi * radius2_over_a**2
+    third_light = third_light_fraction * (flux1 + flux2)
+    overlap = disk_overlap_area(projected_separation, radius1_over_a, radius2_over_a)
+
+    blocked_surface = np.where(line_of_sight >= 0.0, surface1, surface2)
+    flux = flux1 + flux2 + third_light - overlap * blocked_surface
+    median_flux = float(np.nanmedian(flux)) if np.any(np.isfinite(flux)) else 1.0
+    proxy = flux / max(abs(median_flux), 1e-10) - 1.0
+
+    if include_ellipsoidal:
+        proxy += float(ellipsoidal_amp) * np.cos(4.0 * np.pi * phase)
+    if include_reflection:
+        proxy += float(reflection_amp) * np.cos(2.0 * np.pi * phase)
+    if include_beaming:
+        proxy += float(beaming_amp) * np.sin(2.0 * np.pi * phase)
+    return proxy, projected_separation, line_of_sight, separation
+
+
+def binary_semi_major_axis_rsun(period: float, result: dict, mass1_msun: float, mass2_msun: float) -> float:
+    period_unit = str(result.get("period_unit", result.get("baseline_unit", "d"))).lower()
+    period_seconds = period * (DAY_SI if period_unit.startswith("d") else 1.0)
+    total_mass = max(float(mass1_msun) + float(mass2_msun), 1e-6) * M_SUN_SI
+    semi_major_axis_m = (G_SI * total_mass * (period_seconds / (2.0 * np.pi)) ** 2) ** (1.0 / 3.0)
+    return float(semi_major_axis_m / R_SUN_SI)
+
+
+def fit_physical_eclipse_toy_model(
+    phase: np.ndarray,
+    y: np.ndarray,
+    dy: np.ndarray,
+    physical_params: dict[str, float | bool],
+) -> tuple[np.ndarray, np.ndarray, dict[str, float | str], np.ndarray, np.ndarray, np.ndarray]:
+    weights = safe_weights(dy, "standard")
+    sqrt_weights = np.sqrt(weights)
+    proxy, projected_separation, line_of_sight, separation = physical_eclipse_proxy(
+        phase,
+        float(physical_params["eccentricity"]),
+        float(physical_params["omega_deg"]),
+        float(physical_params["inclination_deg"]),
+        float(physical_params["radius1_over_a"]),
+        float(physical_params["radius2_over_a"]),
+        float(physical_params["temperature1"]),
+        float(physical_params["temperature2"]),
+        float(physical_params["limb_u1"]),
+        float(physical_params["limb_u2"]),
+        float(physical_params["third_light_fraction"]),
+        float(physical_params["ellipsoidal_amp"]),
+        float(physical_params["reflection_amp"]),
+        float(physical_params["beaming_amp"]),
+        bool(physical_params["include_ellipsoidal"]),
+        bool(physical_params["include_reflection"]),
+        bool(physical_params["include_beaming"]),
+    )
+    design = np.column_stack([np.ones_like(proxy), proxy])
+    coeff, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], y * sqrt_weights, rcond=None)
+    model = design @ coeff
+    residuals = y - model
+    dof = max(1, len(y) - len(coeff))
+    summary: dict[str, float | str] = {
+        "method": "physical_eclipse_toy",
+        "offset": float(coeff[0]),
+        "scale": float(coeff[1]),
+        "rms": float(np.sqrt(np.mean(residuals**2))) if len(residuals) else None,
+        "weighted_rms": float(np.sqrt(np.average(residuals**2, weights=weights))) if len(residuals) else None,
+        "chi2_red": float(np.sum(weights * residuals**2) / dof) if len(residuals) else None,
+        "n_points": int(len(y)),
+    }
+    return model, coeff, summary, projected_separation, line_of_sight, separation
+
+
 def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
     series = result.get("series", {})
     t = np.asarray(series.get("time", []), dtype=float)
@@ -1261,7 +1414,110 @@ def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
     model_time_phase = ((model_time - t0) / period) % 1.0
     model_phase = np.linspace(0.0, 2.0, 1600)
 
-    if model_kind == "empirical_eclipses":
+    if model_kind == "physical_eclipse_toy":
+        eccentricity = float(np.clip(float(fields.get("model_lab_binary_physical_eccentricity", fields.get("model_lab_binary_eccentricity", "0.0"))), 0.0, 0.9))
+        omega_deg = float(fields.get("model_lab_binary_omega", "90.0"))
+        inclination_deg = float(np.clip(float(fields.get("model_lab_binary_inclination", "85.0")), 0.0, 90.0))
+        mass1_msun = max(float(fields.get("model_lab_binary_mass1", "10.0")), 1e-4)
+        mass2_msun = max(float(fields.get("model_lab_binary_mass2", "1.4")), 1e-4)
+        radius1_rsun = max(float(fields.get("model_lab_binary_radius1", "6.0")), 1e-4)
+        radius2_rsun = max(float(fields.get("model_lab_binary_radius2", "1.0")), 1e-4)
+        temperature1 = max(float(fields.get("model_lab_binary_temperature1", "20000.0")), 1.0)
+        temperature2 = max(float(fields.get("model_lab_binary_temperature2", "8000.0")), 1.0)
+        limb_u1 = float(np.clip(float(fields.get("model_lab_binary_limb_u1", "0.4")), 0.0, 1.0))
+        limb_u2 = float(np.clip(float(fields.get("model_lab_binary_limb_u2", "0.4")), 0.0, 1.0))
+        third_light_fraction = max(float(fields.get("model_lab_binary_third_light", "0.0")), 0.0)
+        include_ellipsoidal = str(fields.get("model_lab_binary_include_ellipsoidal", "true")).strip().lower() in {"1", "true", "yes", "on"}
+        include_reflection = str(fields.get("model_lab_binary_include_reflection", "true")).strip().lower() in {"1", "true", "yes", "on"}
+        include_beaming = str(fields.get("model_lab_binary_include_beaming", "false")).strip().lower() in {"1", "true", "yes", "on"}
+        ellipsoidal_amp = float(fields.get("model_lab_binary_ellipsoidal_amp", "0.02"))
+        reflection_amp = float(fields.get("model_lab_binary_reflection_amp", "0.01"))
+        beaming_amp = float(fields.get("model_lab_binary_beaming_amp", "0.0"))
+
+        semi_major_axis_rsun = binary_semi_major_axis_rsun(period, result, mass1_msun, mass2_msun)
+        radius1_over_a = radius1_rsun / max(semi_major_axis_rsun, 1e-8)
+        radius2_over_a = radius2_rsun / max(semi_major_axis_rsun, 1e-8)
+        physical_params: dict[str, float | bool] = {
+            "eccentricity": eccentricity,
+            "omega_deg": omega_deg,
+            "inclination_deg": inclination_deg,
+            "radius1_over_a": radius1_over_a,
+            "radius2_over_a": radius2_over_a,
+            "temperature1": temperature1,
+            "temperature2": temperature2,
+            "limb_u1": limb_u1,
+            "limb_u2": limb_u2,
+            "third_light_fraction": third_light_fraction,
+            "ellipsoidal_amp": ellipsoidal_amp,
+            "reflection_amp": reflection_amp,
+            "beaming_amp": beaming_amp,
+            "include_ellipsoidal": include_ellipsoidal,
+            "include_reflection": include_reflection,
+            "include_beaming": include_beaming,
+        }
+        model_at_data, coeff, summary, projected_separation, line_of_sight, separation = fit_physical_eclipse_toy_model(phase, y, dy, physical_params)
+        proxy_phase, projected_phase, line_phase, separation_phase = physical_eclipse_proxy(model_phase % 1.0, **physical_params)
+        model_flux = coeff[0] + coeff[1] * proxy_phase
+        proxy_time, _, _, _ = physical_eclipse_proxy(model_time_phase, **physical_params)
+        model_time_flux = coeff[0] + coeff[1] * proxy_time
+        residuals = y - model_at_data
+        n_parameters = 2
+        aic, bic = information_criteria(residuals, n_parameters)
+        q = mass2_msun / mass1_msun
+        brightness_ratio = (temperature2 / temperature1) ** 4 * (radius2_rsun / radius1_rsun) ** 2
+        eclipse_possible = np.cos(np.deg2rad(inclination_deg)) < radius1_over_a + radius2_over_a
+        extrema = sampled_curve_minima(model_phase, model_flux, "primary eclipse" if coeff[1] >= 0.0 else "model minimum")
+        if coeff[1] < 0.0:
+            extrema = sampled_curve_extrema(model_phase, model_flux, "primary eclipse")
+            extrema.sort(key=lambda row: row["flux"], reverse=True)
+        extrema = extrema[:2]
+        for idx, row in enumerate(extrema):
+            row["kind"] = "primary eclipse" if idx == 0 else "secondary eclipse"
+        params_table = [
+            {"parameter": "offset", "value": float(coeff[0])},
+            {"parameter": "scale", "value": float(coeff[1])},
+            {"parameter": "eccentricity", "value": eccentricity},
+            {"parameter": "omega_deg", "value": omega_deg},
+            {"parameter": "inclination_deg", "value": inclination_deg},
+            {"parameter": "mass1_msun", "value": mass1_msun},
+            {"parameter": "mass2_msun", "value": mass2_msun},
+            {"parameter": "mass_ratio_q_m2_over_m1", "value": q},
+            {"parameter": "semi_major_axis_rsun", "value": semi_major_axis_rsun},
+            {"parameter": "radius1_rsun", "value": radius1_rsun},
+            {"parameter": "radius2_rsun", "value": radius2_rsun},
+            {"parameter": "radius1_over_a", "value": radius1_over_a},
+            {"parameter": "radius2_over_a", "value": radius2_over_a},
+            {"parameter": "temperature1_K", "value": temperature1},
+            {"parameter": "temperature2_K", "value": temperature2},
+            {"parameter": "brightness_ratio_f2_over_f1", "value": brightness_ratio},
+            {"parameter": "limb_darkening_u1", "value": limb_u1},
+            {"parameter": "limb_darkening_u2", "value": limb_u2},
+            {"parameter": "third_light_fraction", "value": third_light_fraction},
+            {"parameter": "ellipsoidal_amp_proxy", "value": ellipsoidal_amp if include_ellipsoidal else 0.0},
+            {"parameter": "reflection_amp_proxy", "value": reflection_amp if include_reflection else 0.0},
+            {"parameter": "beaming_amp_proxy", "value": beaming_amp if include_beaming else 0.0},
+        ]
+        summary = {
+            **summary,
+            "eccentricity": eccentricity,
+            "omega_deg": omega_deg,
+            "inclination_deg": inclination_deg,
+            "mass_ratio_q_m2_over_m1": q,
+            "semi_major_axis_rsun": semi_major_axis_rsun,
+            "radius1_over_a": radius1_over_a,
+            "radius2_over_a": radius2_over_a,
+            "temperature_ratio_t2_over_t1": temperature2 / temperature1,
+            "brightness_ratio_f2_over_f1": brightness_ratio,
+            "third_light_fraction": third_light_fraction,
+            "eclipse_possible": "yes" if eclipse_possible else "unlikely",
+            "minimum_projected_separation_over_a": float(np.nanmin(projected_phase)) if len(projected_phase) else None,
+            "mean_separation_over_a": float(np.nanmean(separation_phase)) if len(separation_phase) else None,
+        }
+        formula = (
+            "y(phi) = C + A Q(phi; e, omega, i, R1/a, R2/a, T2/T1, limb darkening, L3) "
+            "+ optional ellipsoidal/reflection/beaming proxy terms"
+        )
+    elif model_kind == "empirical_eclipses":
         include_secondary = str(fields.get("model_lab_binary_secondary", "true")).strip().lower() in {"1", "true", "yes", "on"}
         primary_guess = optional_float(fields.get("model_lab_binary_primary_phase"))
         secondary_guess = optional_float(fields.get("model_lab_binary_secondary_phase"))

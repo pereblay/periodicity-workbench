@@ -54,6 +54,59 @@ st.markdown(
         word-break: normal !important;
         hyphens: none !important;
     }
+    [data-testid="stSidebar"] button[kind="primary"],
+    [data-testid="stSidebar"] [data-testid="stBaseButton-primary"],
+    [data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+        background: #2f343b !important;
+        border-color: #2f343b !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stSidebar"] button[kind="primary"]:hover,
+    [data-testid="stSidebar"] [data-testid="stBaseButton-primary"]:hover,
+    [data-testid="stSidebar"] div.stButton > button[kind="primary"]:hover {
+        background: #1f2328 !important;
+        border-color: #1f2328 !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:hover,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:hover,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:focus,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:focus,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:focus-visible,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:focus-visible,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:active,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:active {
+        border-color: #2f343b !important;
+        background: #2f343b !important;
+        color: #ffffff !important;
+        box-shadow: 0 0 0 0.15rem rgba(47, 52, 59, 0.20) !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:hover svg,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:hover svg,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:focus svg,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:focus svg,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:active svg,
+    [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:active svg {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+    }
+    [data-testid="stSidebar"] input[type="checkbox"] {
+        accent-color: #2f343b !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stCheckbox"]:has(input:checked) label > span:first-child,
+    [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) > div:first-child {
+        background: #2f343b !important;
+        border-color: #2f343b !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stCheckbox"]:has(input:checked) svg,
+    [data-testid="stSidebar"] [data-testid="stCheckbox"]:has(input:checked) svg path,
+    [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) svg,
+    [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) svg path {
+        color: #2f343b !important;
+        fill: #2f343b !important;
+        stroke: #2f343b !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1037,6 +1090,22 @@ def run_with_current_file(fields: dict[str, str]) -> dict:
     return run_analysis(fields, st.session_state["app_file_bytes"], st.session_state["app_filename"])
 
 
+def run_analysis_action(prefix: str, location=st) -> None:
+    fields = fields_from_state(prefix)
+    with st.spinner("Running analysis..."):
+        try:
+            st.session_state["app_result"] = run_with_current_file(fields)
+            st.session_state["app_fields"] = fields
+            st.session_state.pop("app_advanced_result", None)
+            st.session_state.pop("app_model_lab_result", None)
+            st.session_state["app_show_model"] = False
+            st.session_state["app_show_help"] = False
+        except ValueError as exc:
+            location.error(str(exc))
+        else:
+            st.rerun()
+
+
 def input_controls(prefix: str, location=st) -> None:
     if "app_upload_key" not in st.session_state:
         st.session_state["app_upload_key"] = 0
@@ -1080,49 +1149,20 @@ def input_controls(prefix: str, location=st) -> None:
     )
     option_cols[1].checkbox("Use error column", value=st.session_state.get(f"{prefix}_use_error", True), key=f"{prefix}_use_error")
     option_cols[2].checkbox("Flux is magnitude", value=st.session_state.get(f"{prefix}_flux_is_magnitude", False), key=f"{prefix}_flux_is_magnitude")
-    fit_options = ["standard", "robust", "display-optimized"]
-    current_fit_method = st.session_state.get(f"{prefix}_model_fit_method", "standard")
-    if current_fit_method not in fit_options:
-        current_fit_method = "standard"
-    fit_method = location.selectbox(
-        "Sinusoidal fitting",
-        fit_options,
-        index=fit_options.index(current_fit_method),
-        key=f"{prefix}_model_fit_method",
-    )
-    fit_help = {
-        "standard": "Weighted least-squares fit using the provided errors.",
-        "robust": "Robust soft-L1 fit that downweights outliers and over-dominant points.",
-        "display-optimized": "Folded-display fit with amplitude and offset matched to an adaptive outer data range; prewhitening subtraction remains standard.",
-    }
-    location.caption(fit_help[fit_method])
     location.caption("Analysis limits")
     limit_cols = location.columns(4)
     limit_cols[0].text_input("xmin", value=st.session_state.get(f"{prefix}_xmin", ""), key=f"{prefix}_xmin", placeholder="auto")
     limit_cols[1].text_input("xmax", value=st.session_state.get(f"{prefix}_xmax", ""), key=f"{prefix}_xmax", placeholder="auto")
     limit_cols[2].text_input("ymin", value=st.session_state.get(f"{prefix}_ymin", ""), key=f"{prefix}_ymin", placeholder="auto")
     limit_cols[3].text_input("ymax", value=st.session_state.get(f"{prefix}_ymax", ""), key=f"{prefix}_ymax", placeholder="auto")
-    action_cols = location.columns(2)
-    if action_cols[0].button("Run analysis", type="primary", use_container_width=True, key=f"{prefix}_run"):
-        fields = fields_from_state(prefix)
-        with st.spinner("Running analysis..."):
-            try:
-                st.session_state["app_result"] = run_with_current_file(fields)
-                st.session_state["app_fields"] = fields
-                st.session_state.pop("app_advanced_result", None)
-                st.session_state.pop("app_model_lab_result", None)
-                st.session_state["app_show_model"] = False
-                st.session_state["app_show_help"] = False
-            except ValueError as exc:
-                location.error(str(exc))
-            else:
-                st.rerun()
-    if action_cols[1].button("Clear workspace", use_container_width=True, key=f"{prefix}_clear"):
+    if location.button("Clear workspace", use_container_width=True, key=f"{prefix}_clear"):
         clear_state(reset_file=True)
         st.rerun()
 
 
 def search_controls(prefix: str, location=st) -> None:
+    if location.button("Run analysis", type="primary", use_container_width=True, key=f"{prefix}_run"):
+        run_analysis_action(prefix, location)
     time_unit = st.session_state.get(f"{prefix}_time_unit", "days")
     suggestion = None
     file_bytes = st.session_state.get("app_file_bytes")
@@ -1248,6 +1288,22 @@ def folded_controls(prefix: str, location=st) -> None:
                 "Folding on first selected period; fitted periods: "
                 + ", ".join(f"{period:.6g} {period_unit}" for period in st.session_state[f"{prefix}_selected_periods"])
             )
+    fit_options = ["standard", "robust", "display-optimized"]
+    current_fit_method = st.session_state.get(f"{prefix}_model_fit_method", "standard")
+    if current_fit_method not in fit_options:
+        current_fit_method = "standard"
+    fit_method = location.selectbox(
+        "Sinusoidal fitting",
+        fit_options,
+        index=fit_options.index(current_fit_method),
+        key=f"{prefix}_model_fit_method",
+    )
+    fit_help = {
+        "standard": "Weighted least-squares fit using the provided errors.",
+        "robust": "Robust soft-L1 fit that downweights outliers and over-dominant points.",
+        "display-optimized": "Folded-display fit with amplitude and offset matched to an adaptive outer data range; prewhitening subtraction remains standard.",
+    }
+    location.caption(fit_help[fit_method])
     if location.button("Update folded profile", use_container_width=True, key=f"{prefix}_update_fold"):
         current_result = st.session_state.get("app_result")
         if not current_result:
@@ -1673,21 +1729,53 @@ def model_lab_controls(prefix: str, location=st) -> None:
     location.number_input("Display phase bins", min_value=4, max_value=120, value=st.session_state.get(f"{prefix}_model_lab_binary_bins", 24), key=f"{prefix}_model_lab_binary_bins")
     binary_kind = location.radio(
         "Binary model",
-        ["eccentric harmonic", "empirical eclipses"],
+        ["eccentric harmonic", "empirical eclipses", "physical eclipse toy"],
         horizontal=True,
         key=f"{prefix}_model_lab_binary_kind_label",
     )
-    st.session_state[f"{prefix}_model_lab_binary_kind"] = "empirical_eclipses" if binary_kind == "empirical eclipses" else "eccentric_harmonic"
+    if binary_kind == "physical eclipse toy":
+        st.session_state[f"{prefix}_model_lab_binary_kind"] = "physical_eclipse_toy"
+    elif binary_kind == "empirical eclipses":
+        st.session_state[f"{prefix}_model_lab_binary_kind"] = "empirical_eclipses"
+    else:
+        st.session_state[f"{prefix}_model_lab_binary_kind"] = "eccentric_harmonic"
     if st.session_state[f"{prefix}_model_lab_binary_kind"] == "eccentric_harmonic":
         cols = location.columns(2)
         cols[0].number_input("True-anomaly harmonics", min_value=1, max_value=8, value=st.session_state.get(f"{prefix}_model_lab_binary_harmonics", 2), key=f"{prefix}_model_lab_binary_harmonics")
         cols[1].number_input("Initial/fixed eccentricity", min_value=0.0, max_value=0.9, value=st.session_state.get(f"{prefix}_model_lab_binary_eccentricity", 0.2), step=0.05, format="%.3f", key=f"{prefix}_model_lab_binary_eccentricity")
         location.checkbox("Fit eccentricity", value=st.session_state.get(f"{prefix}_model_lab_binary_fit_eccentricity", True), key=f"{prefix}_model_lab_binary_fit_eccentricity")
-    else:
+    elif st.session_state[f"{prefix}_model_lab_binary_kind"] == "empirical_eclipses":
         location.checkbox("Include secondary eclipse", value=st.session_state.get(f"{prefix}_model_lab_binary_secondary", True), key=f"{prefix}_model_lab_binary_secondary")
         cols = location.columns(2)
         cols[0].text_input("Primary phase guess", value=st.session_state.get(f"{prefix}_model_lab_binary_primary_phase", ""), key=f"{prefix}_model_lab_binary_primary_phase", placeholder="auto")
         cols[1].text_input("Secondary phase guess", value=st.session_state.get(f"{prefix}_model_lab_binary_secondary_phase", ""), key=f"{prefix}_model_lab_binary_secondary_phase", placeholder="auto")
+    else:
+        cols = location.columns(3)
+        cols[0].number_input("Eccentricity", min_value=0.0, max_value=0.9, value=st.session_state.get(f"{prefix}_model_lab_binary_physical_eccentricity", 0.0), step=0.05, format="%.3f", key=f"{prefix}_model_lab_binary_physical_eccentricity")
+        cols[1].number_input("Omega [deg]", min_value=0.0, max_value=360.0, value=st.session_state.get(f"{prefix}_model_lab_binary_omega", 90.0), step=5.0, format="%.1f", key=f"{prefix}_model_lab_binary_omega")
+        cols[2].number_input("Inclination [deg]", min_value=0.0, max_value=90.0, value=st.session_state.get(f"{prefix}_model_lab_binary_inclination", 85.0), step=1.0, format="%.1f", key=f"{prefix}_model_lab_binary_inclination")
+        cols = location.columns(2)
+        cols[0].number_input("M1 [Msun]", min_value=0.05, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_binary_mass1", 10.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_binary_mass1")
+        cols[1].number_input("M2 [Msun]", min_value=0.05, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_binary_mass2", 1.4), step=0.1, format="%.2f", key=f"{prefix}_model_lab_binary_mass2")
+        cols = location.columns(2)
+        cols[0].number_input("R1 [Rsun]", min_value=0.01, max_value=300.0, value=st.session_state.get(f"{prefix}_model_lab_binary_radius1", 6.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_binary_radius1")
+        cols[1].number_input("R2 [Rsun]", min_value=0.01, max_value=300.0, value=st.session_state.get(f"{prefix}_model_lab_binary_radius2", 1.0), step=0.1, format="%.2f", key=f"{prefix}_model_lab_binary_radius2")
+        cols = location.columns(2)
+        cols[0].number_input("T1 [K]", min_value=1.0, max_value=100000.0, value=st.session_state.get(f"{prefix}_model_lab_binary_temperature1", 20000.0), step=500.0, format="%.0f", key=f"{prefix}_model_lab_binary_temperature1")
+        cols[1].number_input("T2 [K]", min_value=1.0, max_value=100000.0, value=st.session_state.get(f"{prefix}_model_lab_binary_temperature2", 8000.0), step=500.0, format="%.0f", key=f"{prefix}_model_lab_binary_temperature2")
+        cols = location.columns(3)
+        cols[0].number_input("u1", min_value=0.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_binary_limb_u1", 0.4), step=0.05, format="%.2f", key=f"{prefix}_model_lab_binary_limb_u1")
+        cols[1].number_input("u2", min_value=0.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_binary_limb_u2", 0.4), step=0.05, format="%.2f", key=f"{prefix}_model_lab_binary_limb_u2")
+        cols[2].number_input("Third light", min_value=0.0, max_value=20.0, value=st.session_state.get(f"{prefix}_model_lab_binary_third_light", 0.0), step=0.05, format="%.2f", key=f"{prefix}_model_lab_binary_third_light")
+        cols = location.columns(2)
+        cols[0].checkbox("Ellipsoidal", value=st.session_state.get(f"{prefix}_model_lab_binary_include_ellipsoidal", True), key=f"{prefix}_model_lab_binary_include_ellipsoidal")
+        cols[1].number_input("Ellip. amp", min_value=-1.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_binary_ellipsoidal_amp", 0.02), step=0.005, format="%.4f", key=f"{prefix}_model_lab_binary_ellipsoidal_amp")
+        cols = location.columns(2)
+        cols[0].checkbox("Reflection", value=st.session_state.get(f"{prefix}_model_lab_binary_include_reflection", True), key=f"{prefix}_model_lab_binary_include_reflection")
+        cols[1].number_input("Refl. amp", min_value=-1.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_binary_reflection_amp", 0.01), step=0.005, format="%.4f", key=f"{prefix}_model_lab_binary_reflection_amp")
+        cols = location.columns(2)
+        cols[0].checkbox("Beaming", value=st.session_state.get(f"{prefix}_model_lab_binary_include_beaming", False), key=f"{prefix}_model_lab_binary_include_beaming")
+        cols[1].number_input("Beam amp", min_value=-1.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_binary_beaming_amp", 0.0), step=0.001, format="%.4f", key=f"{prefix}_model_lab_binary_beaming_amp")
     location.checkbox(
         "Show full data set with model",
         value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
@@ -1706,6 +1794,24 @@ def model_lab_controls(prefix: str, location=st) -> None:
             "model_lab_binary_secondary": "true" if st.session_state.get(f"{prefix}_model_lab_binary_secondary", True) else "false",
             "model_lab_binary_primary_phase": str(st.session_state.get(f"{prefix}_model_lab_binary_primary_phase", "")).strip(),
             "model_lab_binary_secondary_phase": str(st.session_state.get(f"{prefix}_model_lab_binary_secondary_phase", "")).strip(),
+            "model_lab_binary_physical_eccentricity": str(st.session_state.get(f"{prefix}_model_lab_binary_physical_eccentricity", 0.0)),
+            "model_lab_binary_omega": str(st.session_state.get(f"{prefix}_model_lab_binary_omega", 90.0)),
+            "model_lab_binary_inclination": str(st.session_state.get(f"{prefix}_model_lab_binary_inclination", 85.0)),
+            "model_lab_binary_mass1": str(st.session_state.get(f"{prefix}_model_lab_binary_mass1", 10.0)),
+            "model_lab_binary_mass2": str(st.session_state.get(f"{prefix}_model_lab_binary_mass2", 1.4)),
+            "model_lab_binary_radius1": str(st.session_state.get(f"{prefix}_model_lab_binary_radius1", 6.0)),
+            "model_lab_binary_radius2": str(st.session_state.get(f"{prefix}_model_lab_binary_radius2", 1.0)),
+            "model_lab_binary_temperature1": str(st.session_state.get(f"{prefix}_model_lab_binary_temperature1", 20000.0)),
+            "model_lab_binary_temperature2": str(st.session_state.get(f"{prefix}_model_lab_binary_temperature2", 8000.0)),
+            "model_lab_binary_limb_u1": str(st.session_state.get(f"{prefix}_model_lab_binary_limb_u1", 0.4)),
+            "model_lab_binary_limb_u2": str(st.session_state.get(f"{prefix}_model_lab_binary_limb_u2", 0.4)),
+            "model_lab_binary_third_light": str(st.session_state.get(f"{prefix}_model_lab_binary_third_light", 0.0)),
+            "model_lab_binary_include_ellipsoidal": "true" if st.session_state.get(f"{prefix}_model_lab_binary_include_ellipsoidal", True) else "false",
+            "model_lab_binary_ellipsoidal_amp": str(st.session_state.get(f"{prefix}_model_lab_binary_ellipsoidal_amp", 0.02)),
+            "model_lab_binary_include_reflection": "true" if st.session_state.get(f"{prefix}_model_lab_binary_include_reflection", True) else "false",
+            "model_lab_binary_reflection_amp": str(st.session_state.get(f"{prefix}_model_lab_binary_reflection_amp", 0.01)),
+            "model_lab_binary_include_beaming": "true" if st.session_state.get(f"{prefix}_model_lab_binary_include_beaming", False) else "false",
+            "model_lab_binary_beaming_amp": str(st.session_state.get(f"{prefix}_model_lab_binary_beaming_amp", 0.0)),
         })
         with st.spinner("Fitting binary model..."):
             try:
@@ -1827,7 +1933,19 @@ def render_binary_orbital_highlight(model_result: dict, app_result: dict) -> Non
         f"<strong>T0 / reference epoch:</strong> {float(model_result.get('t0', 0.0)):.6g} {time_unit}",
         f"<strong>Model:</strong> {model_kind}",
     ]
-    if model_result.get("model_kind") == "eccentric_harmonic":
+    if model_result.get("model_kind") == "physical_eclipse_toy":
+        lines.append(f"<strong>Eccentricity:</strong> {float(summary.get('eccentricity', 0.0)):.4g}")
+        lines.append(f"<strong>Omega:</strong> {float(summary.get('omega_deg', 0.0)):.5g} deg")
+        lines.append(f"<strong>Inclination:</strong> {float(summary.get('inclination_deg', 0.0)):.5g} deg")
+        lines.append(f"<strong>Mass ratio q=M2/M1:</strong> {float(summary.get('mass_ratio_q_m2_over_m1', 0.0)):.5g}")
+        lines.append(f"<strong>Semi-major axis:</strong> {float(summary.get('semi_major_axis_rsun', 0.0)):.5g} Rsun")
+        lines.append(f"<strong>Radii:</strong> R1/a={float(summary.get('radius1_over_a', 0.0)):.5g}, R2/a={float(summary.get('radius2_over_a', 0.0)):.5g}")
+        lines.append(f"<strong>Temperature ratio T2/T1:</strong> {float(summary.get('temperature_ratio_t2_over_t1', 0.0)):.5g}")
+        lines.append(f"<strong>Flux ratio F2/F1:</strong> {float(summary.get('brightness_ratio_f2_over_f1', 0.0)):.5g}")
+        lines.append(f"<strong>Third light fraction:</strong> {float(summary.get('third_light_fraction', 0.0)):.5g}")
+        lines.append(f"<strong>Eclipse geometry:</strong> {summary.get('eclipse_possible', 'unknown')}")
+        lines.append("<strong>Pedagogical hint:</strong> masses set the orbital scale through Kepler's law, radii and inclination set whether eclipses occur, and temperatures/third light dilute or deepen the eclipses.")
+    elif model_result.get("model_kind") == "eccentric_harmonic":
         eccentricity = summary.get("eccentricity")
         if eccentricity is not None:
             lines.append(f"<strong>Eccentricity:</strong> {float(eccentricity):.4g}")
