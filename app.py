@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
+__version__ = "1.0.0"
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".matplotlib"))
 
 import matplotlib
@@ -68,6 +69,124 @@ G_SI = 6.67430e-11
 M_SUN_SI = 1.98847e30
 R_SUN_SI = 6.957e8
 DAY_SI = 86400.0
+T_SUN_K = 5772.0
+
+BHL_DONOR_PRESETS: dict[str, dict[str, dict[str, float]]] = {
+    # Approximate pedagogical stellar values. They are intended to seed the toy model,
+    # not to replace a system-specific stellar calibration.
+    "O5": {
+        "V": {"mass_msun": 43.0, "radius_rsun": 11.5, "luminosity_lsun": 3.47e5, "teff_k": 41400.0},
+        "III": {"mass_msun": 40.0, "radius_rsun": 15.0, "luminosity_lsun": 6.0e5, "teff_k": 41000.0},
+        "I": {"mass_msun": 45.0, "radius_rsun": 20.0, "luminosity_lsun": 9.0e5, "teff_k": 39000.0},
+    },
+    "O7": {
+        "V": {"mass_msun": 28.0, "radius_rsun": 9.4, "luminosity_lsun": 1.51e5, "teff_k": 37900.0},
+        "III": {"mass_msun": 30.0, "radius_rsun": 14.0, "luminosity_lsun": 3.0e5, "teff_k": 37500.0},
+        "I": {"mass_msun": 34.0, "radius_rsun": 22.0, "luminosity_lsun": 5.5e5, "teff_k": 35000.0},
+    },
+    "O9": {
+        "V": {"mass_msun": 20.0, "radius_rsun": 7.7, "luminosity_lsun": 6.61e4, "teff_k": 33300.0},
+        "III": {"mass_msun": 24.0, "radius_rsun": 13.0, "luminosity_lsun": 1.6e5, "teff_k": 33000.0},
+        "I": {"mass_msun": 28.0, "radius_rsun": 22.0, "luminosity_lsun": 3.5e5, "teff_k": 31500.0},
+    },
+    "B0": {
+        "V": {"mass_msun": 17.5, "radius_rsun": 7.4, "luminosity_lsun": 4.5e4, "teff_k": 30000.0},
+        "III": {"mass_msun": 20.0, "radius_rsun": 12.0, "luminosity_lsun": 1.1e5, "teff_k": 29000.0},
+        "I": {"mass_msun": 25.0, "radius_rsun": 25.0, "luminosity_lsun": 2.5e5, "teff_k": 26000.0},
+    },
+    "B1": {
+        "V": {"mass_msun": 12.5, "radius_rsun": 5.6, "luminosity_lsun": 1.8e4, "teff_k": 25000.0},
+        "III": {"mass_msun": 15.0, "radius_rsun": 10.0, "luminosity_lsun": 6.0e4, "teff_k": 24000.0},
+        "I": {"mass_msun": 20.0, "radius_rsun": 30.0, "luminosity_lsun": 1.8e5, "teff_k": 22000.0},
+    },
+    "B2": {
+        "V": {"mass_msun": 9.0, "radius_rsun": 4.5, "luminosity_lsun": 6.0e3, "teff_k": 21000.0},
+        "III": {"mass_msun": 12.0, "radius_rsun": 8.0, "luminosity_lsun": 2.5e4, "teff_k": 20000.0},
+        "I": {"mass_msun": 18.0, "radius_rsun": 35.0, "luminosity_lsun": 1.1e5, "teff_k": 19000.0},
+    },
+    "B3": {
+        "V": {"mass_msun": 7.6, "radius_rsun": 4.0, "luminosity_lsun": 2.0e3, "teff_k": 19000.0},
+        "III": {"mass_msun": 9.0, "radius_rsun": 7.0, "luminosity_lsun": 1.0e4, "teff_k": 18000.0},
+        "I": {"mass_msun": 15.0, "radius_rsun": 40.0, "luminosity_lsun": 7.0e4, "teff_k": 17000.0},
+    },
+    "B5": {
+        "V": {"mass_msun": 5.9, "radius_rsun": 3.9, "luminosity_lsun": 8.0e2, "teff_k": 15400.0},
+        "III": {"mass_msun": 7.0, "radius_rsun": 8.0, "luminosity_lsun": 5.0e3, "teff_k": 15000.0},
+        "I": {"mass_msun": 12.0, "radius_rsun": 50.0, "luminosity_lsun": 5.0e4, "teff_k": 14000.0},
+    },
+    "B8": {
+        "V": {"mass_msun": 3.8, "radius_rsun": 3.0, "luminosity_lsun": 2.0e2, "teff_k": 12000.0},
+        "III": {"mass_msun": 5.0, "radius_rsun": 8.5, "luminosity_lsun": 2.0e3, "teff_k": 11800.0},
+        "I": {"mass_msun": 10.0, "radius_rsun": 60.0, "luminosity_lsun": 3.0e4, "teff_k": 11000.0},
+    },
+    "A0": {
+        "V": {"mass_msun": 2.33, "radius_rsun": 2.19, "luminosity_lsun": 38.4, "teff_k": 9700.0},
+        "III": {"mass_msun": 3.0, "radius_rsun": 5.0, "luminosity_lsun": 150.0, "teff_k": 9300.0},
+        "I": {"mass_msun": 8.0, "radius_rsun": 80.0, "luminosity_lsun": 2.0e4, "teff_k": 9000.0},
+    },
+    "A5": {
+        "V": {"mass_msun": 1.86, "radius_rsun": 1.79, "luminosity_lsun": 12.4, "teff_k": 8100.0},
+        "III": {"mass_msun": 2.4, "radius_rsun": 6.0, "luminosity_lsun": 120.0, "teff_k": 8000.0},
+        "I": {"mass_msun": 7.0, "radius_rsun": 90.0, "luminosity_lsun": 1.8e4, "teff_k": 8000.0},
+    },
+    "F0": {
+        "V": {"mass_msun": 1.60, "radius_rsun": 1.50, "luminosity_lsun": 5.0, "teff_k": 7300.0},
+        "III": {"mass_msun": 2.0, "radius_rsun": 7.0, "luminosity_lsun": 100.0, "teff_k": 7000.0},
+        "I": {"mass_msun": 7.0, "radius_rsun": 110.0, "luminosity_lsun": 2.0e4, "teff_k": 7200.0},
+    },
+    "F5": {
+        "V": {"mass_msun": 1.33, "radius_rsun": 1.30, "luminosity_lsun": 2.5, "teff_k": 6500.0},
+        "III": {"mass_msun": 1.8, "radius_rsun": 8.0, "luminosity_lsun": 80.0, "teff_k": 6400.0},
+        "I": {"mass_msun": 6.0, "radius_rsun": 130.0, "luminosity_lsun": 1.8e4, "teff_k": 6500.0},
+    },
+    "G0": {
+        "V": {"mass_msun": 1.06, "radius_rsun": 1.10, "luminosity_lsun": 1.35, "teff_k": 5930.0},
+        "III": {"mass_msun": 1.6, "radius_rsun": 10.0, "luminosity_lsun": 60.0, "teff_k": 5800.0},
+        "I": {"mass_msun": 6.0, "radius_rsun": 150.0, "luminosity_lsun": 1.5e4, "teff_k": 5800.0},
+    },
+    "G2": {
+        "V": {"mass_msun": 1.00, "radius_rsun": 1.01, "luminosity_lsun": 1.02, "teff_k": 5770.0},
+        "III": {"mass_msun": 1.5, "radius_rsun": 11.0, "luminosity_lsun": 55.0, "teff_k": 5600.0},
+        "I": {"mass_msun": 6.0, "radius_rsun": 180.0, "luminosity_lsun": 1.5e4, "teff_k": 5600.0},
+    },
+    "G5": {
+        "V": {"mass_msun": 0.98, "radius_rsun": 0.98, "luminosity_lsun": 0.89, "teff_k": 5660.0},
+        "III": {"mass_msun": 1.5, "radius_rsun": 12.0, "luminosity_lsun": 50.0, "teff_k": 5200.0},
+        "I": {"mass_msun": 6.0, "radius_rsun": 220.0, "luminosity_lsun": 1.6e4, "teff_k": 5200.0},
+    },
+    "K0": {
+        "V": {"mass_msun": 0.88, "radius_rsun": 0.81, "luminosity_lsun": 0.46, "teff_k": 5270.0},
+        "III": {"mass_msun": 1.5, "radius_rsun": 14.0, "luminosity_lsun": 55.0, "teff_k": 4700.0},
+        "I": {"mass_msun": 7.0, "radius_rsun": 300.0, "luminosity_lsun": 2.0e4, "teff_k": 4500.0},
+    },
+    "K5": {
+        "V": {"mass_msun": 0.70, "radius_rsun": 0.70, "luminosity_lsun": 0.17, "teff_k": 4440.0},
+        "III": {"mass_msun": 1.4, "radius_rsun": 25.0, "luminosity_lsun": 120.0, "teff_k": 4000.0},
+        "I": {"mass_msun": 8.0, "radius_rsun": 500.0, "luminosity_lsun": 4.0e4, "teff_k": 3900.0},
+    },
+    "M0": {
+        "V": {"mass_msun": 0.55, "radius_rsun": 0.60, "luminosity_lsun": 0.08, "teff_k": 3800.0},
+        "III": {"mass_msun": 1.3, "radius_rsun": 45.0, "luminosity_lsun": 500.0, "teff_k": 3800.0},
+        "I": {"mass_msun": 10.0, "radius_rsun": 700.0, "luminosity_lsun": 8.0e4, "teff_k": 3700.0},
+    },
+    "M5": {
+        "V": {"mass_msun": 0.21, "radius_rsun": 0.27, "luminosity_lsun": 0.007, "teff_k": 3100.0},
+        "III": {"mass_msun": 1.2, "radius_rsun": 90.0, "luminosity_lsun": 1200.0, "teff_k": 3400.0},
+        "I": {"mass_msun": 12.0, "radius_rsun": 1000.0, "luminosity_lsun": 1.2e5, "teff_k": 3400.0},
+    },
+}
+
+
+def bhl_donor_preset_values(spectral_type: str | None, luminosity_class: str | None) -> dict[str, float] | None:
+    spectral_type = (spectral_type or "").strip().upper()
+    luminosity_class = (luminosity_class or "").strip().upper()
+    if spectral_type in {"", "MANUAL"}:
+        return None
+    return BHL_DONOR_PRESETS.get(spectral_type, {}).get(luminosity_class)
+
+
+def stellar_luminosity_from_radius_temperature(radius_rsun: float, temperature_k: float) -> float:
+    return max(float(radius_rsun), 1e-12) ** 2 * (max(float(temperature_k), 1.0) / T_SUN_K) ** 4
 
 
 def is_numeric_table_row(line: str) -> bool:
@@ -111,6 +230,10 @@ def fits_payload(raw: bytes) -> bytes:
 
 def validate_upload(filename: str, raw: bytes) -> str:
     suffix = Path(filename or "").suffix.lower()
+    if not raw:
+        if is_fits_upload(filename, raw):
+            raise ValueError("Uploaded FITS file is empty or corrupt")
+        raise ValueError("Uploaded file is empty")
     if is_fits_upload(filename, raw):
         try:
             with fits.open(io.BytesIO(fits_payload(raw)), memmap=False):
@@ -123,8 +246,6 @@ def validate_upload(filename: str, raw: bytes) -> str:
     if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
         allowed = ".txt, .dat, .lc, FITS files by content, or no extension"
         raise ValueError(f"Unsupported file extension '{suffix or '(none)'}'; expected {allowed}")
-    if not raw:
-        raise ValueError("Uploaded file is empty")
 
     try:
         text = raw.decode("ascii")
@@ -157,6 +278,8 @@ def validate_upload(filename: str, raw: bytes) -> str:
 
 def fits_table_metadata(raw: bytes) -> list[dict]:
     rows: list[dict] = []
+    if not raw:
+        raise ValueError("Uploaded FITS file is empty or corrupt")
     try:
         hdul = fits.open(io.BytesIO(fits_payload(raw)), memmap=False)
     except Exception as exc:
@@ -207,6 +330,8 @@ def read_fits_columns(
     flux_column: str,
     error_column: str | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not raw:
+        raise ValueError("Uploaded FITS file is empty or corrupt")
     try:
         hdul = fits.open(io.BytesIO(fits_payload(raw)), memmap=False)
     except Exception as exc:
@@ -1281,6 +1406,8 @@ def physical_eclipse_proxy(
     radius2_over_a: float,
     temperature1: float,
     temperature2: float,
+    luminosity1_lsun: float,
+    luminosity2_lsun: float,
     limb_u1: float,
     limb_u2: float,
     third_light_fraction: float,
@@ -1299,6 +1426,8 @@ def physical_eclipse_proxy(
     radius2_over_a = float(np.clip(radius2_over_a, 1e-4, 0.9))
     temperature1 = max(float(temperature1), 1.0)
     temperature2 = max(float(temperature2), 1.0)
+    luminosity1_lsun = max(float(luminosity1_lsun), 1e-12)
+    luminosity2_lsun = max(float(luminosity2_lsun), 1e-12)
     limb_u1 = float(np.clip(limb_u1, 0.0, 1.0))
     limb_u2 = float(np.clip(limb_u2, 0.0, 1.0))
     third_light_fraction = max(float(third_light_fraction), 0.0)
@@ -1312,7 +1441,12 @@ def physical_eclipse_proxy(
     line_of_sight = separation * sin_i * np.sin(theta)
 
     surface1 = max(1.0 - limb_u1 / 3.0, 1e-4)
-    surface2 = (temperature2 / temperature1) ** 4 * max(1.0 - limb_u2 / 3.0, 1e-4)
+    surface_ratio_from_luminosity = (luminosity2_lsun / max(radius2_over_a**2, 1e-12)) / (
+        luminosity1_lsun / max(radius1_over_a**2, 1e-12)
+    )
+    surface_ratio_from_temperature = (temperature2 / temperature1) ** 4
+    surface_ratio = surface_ratio_from_luminosity if np.isfinite(surface_ratio_from_luminosity) else surface_ratio_from_temperature
+    surface2 = max(surface_ratio, 1e-12) * max(1.0 - limb_u2 / 3.0, 1e-4)
     flux1 = surface1 * np.pi * radius1_over_a**2
     flux2 = surface2 * np.pi * radius2_over_a**2
     third_light = third_light_fraction * (flux1 + flux2)
@@ -1357,6 +1491,8 @@ def fit_physical_eclipse_toy_model(
         float(physical_params["radius2_over_a"]),
         float(physical_params["temperature1"]),
         float(physical_params["temperature2"]),
+        float(physical_params["luminosity1_lsun"]),
+        float(physical_params["luminosity2_lsun"]),
         float(physical_params["limb_u1"]),
         float(physical_params["limb_u2"]),
         float(physical_params["third_light_fraction"]),
@@ -1418,12 +1554,30 @@ def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
         eccentricity = float(np.clip(float(fields.get("model_lab_binary_physical_eccentricity", fields.get("model_lab_binary_eccentricity", "0.0"))), 0.0, 0.9))
         omega_deg = float(fields.get("model_lab_binary_omega", "90.0"))
         inclination_deg = float(np.clip(float(fields.get("model_lab_binary_inclination", "85.0")), 0.0, 90.0))
+        primary_spectral_type = fields.get("model_lab_binary_primary_spectral_type", "Manual").strip()
+        primary_luminosity_class = fields.get("model_lab_binary_primary_luminosity_class", "V").strip()
+        secondary_spectral_type = fields.get("model_lab_binary_secondary_spectral_type", "Manual").strip()
+        secondary_luminosity_class = fields.get("model_lab_binary_secondary_luminosity_class", "V").strip()
         mass1_msun = max(float(fields.get("model_lab_binary_mass1", "10.0")), 1e-4)
         mass2_msun = max(float(fields.get("model_lab_binary_mass2", "1.4")), 1e-4)
         radius1_rsun = max(float(fields.get("model_lab_binary_radius1", "6.0")), 1e-4)
         radius2_rsun = max(float(fields.get("model_lab_binary_radius2", "1.0")), 1e-4)
         temperature1 = max(float(fields.get("model_lab_binary_temperature1", "20000.0")), 1.0)
         temperature2 = max(float(fields.get("model_lab_binary_temperature2", "8000.0")), 1.0)
+        luminosity1_lsun = max(float(fields.get("model_lab_binary_luminosity1", stellar_luminosity_from_radius_temperature(radius1_rsun, temperature1))), 1e-12)
+        luminosity2_lsun = max(float(fields.get("model_lab_binary_luminosity2", stellar_luminosity_from_radius_temperature(radius2_rsun, temperature2))), 1e-12)
+        primary_preset = bhl_donor_preset_values(primary_spectral_type, primary_luminosity_class)
+        secondary_preset = bhl_donor_preset_values(secondary_spectral_type, secondary_luminosity_class)
+        if primary_preset is not None:
+            mass1_msun = max(float(primary_preset["mass_msun"]), 1e-4)
+            radius1_rsun = max(float(primary_preset["radius_rsun"]), 1e-4)
+            temperature1 = max(float(primary_preset["teff_k"]), 1.0)
+            luminosity1_lsun = max(float(primary_preset["luminosity_lsun"]), 1e-12)
+        if secondary_preset is not None:
+            mass2_msun = max(float(secondary_preset["mass_msun"]), 1e-4)
+            radius2_rsun = max(float(secondary_preset["radius_rsun"]), 1e-4)
+            temperature2 = max(float(secondary_preset["teff_k"]), 1.0)
+            luminosity2_lsun = max(float(secondary_preset["luminosity_lsun"]), 1e-12)
         limb_u1 = float(np.clip(float(fields.get("model_lab_binary_limb_u1", "0.4")), 0.0, 1.0))
         limb_u2 = float(np.clip(float(fields.get("model_lab_binary_limb_u2", "0.4")), 0.0, 1.0))
         third_light_fraction = max(float(fields.get("model_lab_binary_third_light", "0.0")), 0.0)
@@ -1445,6 +1599,8 @@ def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
             "radius2_over_a": radius2_over_a,
             "temperature1": temperature1,
             "temperature2": temperature2,
+            "luminosity1_lsun": luminosity1_lsun,
+            "luminosity2_lsun": luminosity2_lsun,
             "limb_u1": limb_u1,
             "limb_u2": limb_u2,
             "third_light_fraction": third_light_fraction,
@@ -1464,7 +1620,11 @@ def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
         n_parameters = 2
         aic, bic = information_criteria(residuals, n_parameters)
         q = mass2_msun / mass1_msun
-        brightness_ratio = (temperature2 / temperature1) ** 4 * (radius2_rsun / radius1_rsun) ** 2
+        bolometric_luminosity_ratio = luminosity2_lsun / luminosity1_lsun
+        surface_brightness_ratio = (luminosity2_lsun / max(radius2_rsun**2, 1e-12)) / (
+            luminosity1_lsun / max(radius1_rsun**2, 1e-12)
+        )
+        blackbody_luminosity_ratio = (temperature2 / temperature1) ** 4 * (radius2_rsun / radius1_rsun) ** 2
         eclipse_possible = np.cos(np.deg2rad(inclination_deg)) < radius1_over_a + radius2_over_a
         extrema = sampled_curve_minima(model_phase, model_flux, "primary eclipse" if coeff[1] >= 0.0 else "model minimum")
         if coeff[1] < 0.0:
@@ -1479,6 +1639,10 @@ def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
             {"parameter": "eccentricity", "value": eccentricity},
             {"parameter": "omega_deg", "value": omega_deg},
             {"parameter": "inclination_deg", "value": inclination_deg},
+            {"parameter": "primary_spectral_type", "value": primary_spectral_type.upper() if primary_preset is not None else "manual"},
+            {"parameter": "primary_luminosity_class", "value": primary_luminosity_class.upper() if primary_preset is not None else "manual"},
+            {"parameter": "secondary_spectral_type", "value": secondary_spectral_type.upper() if secondary_preset is not None else "manual"},
+            {"parameter": "secondary_luminosity_class", "value": secondary_luminosity_class.upper() if secondary_preset is not None else "manual"},
             {"parameter": "mass1_msun", "value": mass1_msun},
             {"parameter": "mass2_msun", "value": mass2_msun},
             {"parameter": "mass_ratio_q_m2_over_m1", "value": q},
@@ -1489,7 +1653,11 @@ def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
             {"parameter": "radius2_over_a", "value": radius2_over_a},
             {"parameter": "temperature1_K", "value": temperature1},
             {"parameter": "temperature2_K", "value": temperature2},
-            {"parameter": "brightness_ratio_f2_over_f1", "value": brightness_ratio},
+            {"parameter": "luminosity1_lsun", "value": luminosity1_lsun},
+            {"parameter": "luminosity2_lsun", "value": luminosity2_lsun},
+            {"parameter": "bolometric_luminosity_ratio_l2_over_l1", "value": bolometric_luminosity_ratio},
+            {"parameter": "surface_brightness_ratio_s2_over_s1", "value": surface_brightness_ratio},
+            {"parameter": "blackbody_luminosity_ratio_from_r_t", "value": blackbody_luminosity_ratio},
             {"parameter": "limb_darkening_u1", "value": limb_u1},
             {"parameter": "limb_darkening_u2", "value": limb_u2},
             {"parameter": "third_light_fraction", "value": third_light_fraction},
@@ -1504,17 +1672,29 @@ def binary_model_lab(result: dict, fields: dict[str, str]) -> dict:
             "inclination_deg": inclination_deg,
             "mass_ratio_q_m2_over_m1": q,
             "semi_major_axis_rsun": semi_major_axis_rsun,
+            "primary_spectral_type": primary_spectral_type.upper() if primary_preset is not None else "manual",
+            "primary_luminosity_class": primary_luminosity_class.upper() if primary_preset is not None else "manual",
+            "secondary_spectral_type": secondary_spectral_type.upper() if secondary_preset is not None else "manual",
+            "secondary_luminosity_class": secondary_luminosity_class.upper() if secondary_preset is not None else "manual",
+            "mass1_msun": mass1_msun,
+            "mass2_msun": mass2_msun,
+            "radius1_rsun": radius1_rsun,
+            "radius2_rsun": radius2_rsun,
             "radius1_over_a": radius1_over_a,
             "radius2_over_a": radius2_over_a,
             "temperature_ratio_t2_over_t1": temperature2 / temperature1,
-            "brightness_ratio_f2_over_f1": brightness_ratio,
+            "luminosity1_lsun": luminosity1_lsun,
+            "luminosity2_lsun": luminosity2_lsun,
+            "bolometric_luminosity_ratio_l2_over_l1": bolometric_luminosity_ratio,
+            "surface_brightness_ratio_s2_over_s1": surface_brightness_ratio,
+            "blackbody_luminosity_ratio_from_r_t": blackbody_luminosity_ratio,
             "third_light_fraction": third_light_fraction,
             "eclipse_possible": "yes" if eclipse_possible else "unlikely",
             "minimum_projected_separation_over_a": float(np.nanmin(projected_phase)) if len(projected_phase) else None,
             "mean_separation_over_a": float(np.nanmean(separation_phase)) if len(separation_phase) else None,
         }
         formula = (
-            "y(phi) = C + A Q(phi; e, omega, i, R1/a, R2/a, T2/T1, limb darkening, L3) "
+            "y(phi) = C + A Q(phi; e, omega, i, R1/a, R2/a, L2/L1, surface brightness, limb darkening, L3) "
             "+ optional ellipsoidal/reflection/beaming proxy terms"
         )
     elif model_kind == "empirical_eclipses":
@@ -1627,15 +1807,17 @@ def bondi_hoyle_proxy(
     eccentricity: float,
     wind_speed_ratio: float,
     wind_beta: float,
+    donor_radius_over_a: float = 0.15,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     eccentricity = float(np.clip(eccentricity, 0.0, 0.9))
     wind_speed_ratio = max(float(wind_speed_ratio), 0.05)
     wind_beta = max(float(wind_beta), 0.0)
+    donor_radius_over_a = float(np.clip(donor_radius_over_a, 0.001, 0.95))
     true_anomaly = true_anomaly_from_phase(phase, eccentricity)
     separation = (1.0 - eccentricity**2) / (1.0 + eccentricity * np.cos(true_anomaly))
     separation = np.maximum(separation, 1e-4)
     orbital_speed2 = np.maximum(2.0 / separation - 1.0, 1e-4)
-    wind_speed = wind_speed_ratio * np.maximum(1.0 - 0.15 / separation, 0.05) ** wind_beta
+    wind_speed = wind_speed_ratio * np.maximum(1.0 - donor_radius_over_a / separation, 0.05) ** wind_beta
     relative_speed2 = wind_speed**2 + orbital_speed2
     density = 1.0 / (separation**2 * np.maximum(wind_speed, 1e-4))
     proxy = density / np.maximum(relative_speed2, 1e-8) ** 1.5
@@ -1652,12 +1834,14 @@ def fit_bondi_hoyle_model(
     fit_wind_speed: bool,
     wind_speed_guess: float,
     wind_beta: float,
+    donor_radius_over_a: float,
     include_phase_lag: bool,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, float | str]]:
     weights = safe_weights(dy, "standard")
     sqrt_weights = np.sqrt(weights)
     eccentricity_guess = float(np.clip(eccentricity_guess, 0.0, 0.9))
     wind_speed_guess = max(float(wind_speed_guess), 0.05)
+    donor_radius_over_a = float(np.clip(donor_radius_over_a, 0.001, 0.95))
     phase_lag_guess = 0.0
 
     variable0 = []
@@ -1693,7 +1877,7 @@ def fit_bondi_hoyle_model(
     def linear_model_for(variable_params: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float, float]:
         eccentricity, wind_speed_ratio, phase_lag = unpack(variable_params)
         shifted_phase = (phase - phase_lag) % 1.0
-        proxy, _, _ = bondi_hoyle_proxy(shifted_phase, eccentricity, wind_speed_ratio, wind_beta)
+        proxy, _, _ = bondi_hoyle_proxy(shifted_phase, eccentricity, wind_speed_ratio, wind_beta, donor_radius_over_a)
         design = np.column_stack([np.ones_like(proxy), proxy])
         coeff, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], y * sqrt_weights, rcond=None)
         return design @ coeff, coeff, eccentricity, wind_speed_ratio, phase_lag
@@ -1719,6 +1903,7 @@ def fit_bondi_hoyle_model(
         "eccentricity": eccentricity,
         "wind_speed_ratio": wind_speed_ratio,
         "wind_beta": wind_beta,
+        "donor_radius_over_a": donor_radius_over_a,
         "phase_lag": phase_lag,
         "rms": float(np.sqrt(np.mean(residuals**2))) if len(residuals) else None,
         "weighted_rms": float(np.sqrt(np.average(residuals**2, weights=weights))) if len(residuals) else None,
@@ -1749,6 +1934,7 @@ def physical_wind_to_ratio(
     wind_speed_ratio = v_inf_m_s / max(orbital_speed_m_s, 1e-12)
     periastron_m = semi_major_axis_m * (1.0 - float(np.clip(eccentricity, 0.0, 0.95)))
     donor_radius_m = donor_radius_rsun * R_SUN_SI
+    donor_radius_over_a = donor_radius_m / semi_major_axis_m
     return {
         "wind_speed_ratio": float(wind_speed_ratio),
         "v_inf_km_s": float(v_inf_km_s),
@@ -1756,6 +1942,7 @@ def physical_wind_to_ratio(
         "compact_mass_msun": float(compact_mass_msun),
         "total_mass_msun": float(donor_mass_msun + compact_mass_msun),
         "donor_radius_rsun": float(donor_radius_rsun),
+        "donor_radius_over_a": float(donor_radius_over_a),
         "semi_major_axis_rsun": float(semi_major_axis_m / R_SUN_SI),
         "orbital_speed_km_s": float(orbital_speed_m_s / 1000.0),
         "periastron_distance_rsun": float(periastron_m / R_SUN_SI),
@@ -1789,20 +1976,30 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
     eccentricity_guess = float(fields.get("model_lab_bh_eccentricity", "0.3"))
     wind_input_mode = fields.get("model_lab_bh_wind_input_mode", "ratio").strip().lower()
     physical_wind: dict[str, float] = {}
+    donor_spectral_type = fields.get("model_lab_bh_donor_spectral_type", "Manual").strip()
+    donor_luminosity_class = fields.get("model_lab_bh_donor_luminosity_class", "V").strip()
+    donor_mass_msun = float(fields.get("model_lab_bh_donor_mass", "18.0"))
+    donor_radius_rsun = float(fields.get("model_lab_bh_donor_radius", "8.0"))
+    preset_values = bhl_donor_preset_values(donor_spectral_type, donor_luminosity_class)
+    if preset_values is not None:
+        donor_mass_msun = float(preset_values["mass_msun"])
+        donor_radius_rsun = float(preset_values["radius_rsun"])
     if wind_input_mode in {"v_inf", "vinf", "physical"}:
         physical_wind = physical_wind_to_ratio(
             period,
             result.get("baseline_unit", result.get("period_unit", "d")),
             eccentricity_guess,
             float(fields.get("model_lab_bh_vinf", "1000.0")),
-            float(fields.get("model_lab_bh_donor_mass", "18.0")),
+            donor_mass_msun,
             float(fields.get("model_lab_bh_compact_mass", "1.4")),
-            float(fields.get("model_lab_bh_donor_radius", "8.0")),
+            donor_radius_rsun,
         )
         wind_speed_guess = physical_wind["wind_speed_ratio"]
+        donor_radius_over_a = physical_wind["donor_radius_over_a"]
     else:
         wind_input_mode = "ratio"
         wind_speed_guess = float(fields.get("model_lab_bh_wind_speed_ratio", "3.0"))
+        donor_radius_over_a = float(fields.get("model_lab_bh_donor_radius_over_a", "0.15"))
     wind_beta = float(fields.get("model_lab_bh_wind_beta", "0.8"))
     fit_eccentricity = str(fields.get("model_lab_bh_fit_eccentricity", "true")).strip().lower() in {"1", "true", "yes", "on"}
     fit_wind_speed = str(fields.get("model_lab_bh_fit_wind_speed", "true")).strip().lower() in {"1", "true", "yes", "on"} and wind_input_mode == "ratio"
@@ -1819,6 +2016,7 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
         fit_wind_speed,
         wind_speed_guess,
         wind_beta,
+        donor_radius_over_a,
         include_phase_lag,
     )
     residuals = y - model_at_data
@@ -1831,6 +2029,7 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
         float(summary["eccentricity"]),
         float(summary["wind_speed_ratio"]),
         wind_beta,
+        donor_radius_over_a,
     )
     model_flux = float(coeff[0]) + float(coeff[1]) * proxy_phase
     model_time = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), 2500)
@@ -1840,6 +2039,7 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
         float(summary["eccentricity"]),
         float(summary["wind_speed_ratio"]),
         wind_beta,
+        donor_radius_over_a,
     )
     model_time_flux = float(coeff[0]) + float(coeff[1]) * proxy_time
     extrema = sampled_curve_extrema(model_phase, model_flux, "BHL accretion maximum")
@@ -1852,25 +2052,36 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
         "period": period,
         "T0": t0,
         "wind_input_mode": wind_input_mode,
+        "donor_radius_over_a": donor_radius_over_a,
         "AIC": aic,
         "BIC": bic,
         "n_parameters": n_parameters,
         **physical_wind,
     }
+    if preset_values is not None:
+        summary["donor_spectral_type"] = donor_spectral_type.upper()
+        summary["donor_luminosity_class"] = donor_luminosity_class.upper()
     parameters = [
         {"parameter": "offset", "value": float(coeff[0])},
         {"parameter": "bhl_scale", "value": float(coeff[1])},
         {"parameter": "eccentricity", "value": float(summary["eccentricity"])},
         {"parameter": "wind_speed_ratio_vwind_vorb", "value": float(summary["wind_speed_ratio"])},
         {"parameter": "wind_beta", "value": wind_beta},
+        {"parameter": "donor_radius_over_a", "value": float(donor_radius_over_a)},
         {"parameter": "phase_lag", "value": phase_lag},
     ]
+    if preset_values is not None:
+        parameters.extend([
+            {"parameter": "donor_spectral_type", "value": donor_spectral_type.upper()},
+            {"parameter": "donor_luminosity_class", "value": donor_luminosity_class.upper()},
+        ])
     if physical_wind:
         parameters.extend([
             {"parameter": "v_inf_km_s", "value": physical_wind["v_inf_km_s"]},
             {"parameter": "donor_mass_msun", "value": physical_wind["donor_mass_msun"]},
             {"parameter": "compact_mass_msun", "value": physical_wind["compact_mass_msun"]},
             {"parameter": "donor_radius_rsun", "value": physical_wind["donor_radius_rsun"]},
+            {"parameter": "donor_radius_over_a_physical", "value": physical_wind["donor_radius_over_a"]},
             {"parameter": "semi_major_axis_rsun", "value": physical_wind["semi_major_axis_rsun"]},
             {"parameter": "orbital_speed_km_s", "value": physical_wind["orbital_speed_km_s"]},
             {"parameter": "periastron_distance_rsun", "value": physical_wind["periastron_distance_rsun"]},

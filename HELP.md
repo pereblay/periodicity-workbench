@@ -418,7 +418,7 @@ The model first uses Kepler's third law to estimate the semi-major axis:
 a^3 = G (M1 + M2) (P / 2 pi)^2
 ```
 
-The stellar radii entered in solar radii are converted to fractional radii `R1/a` and `R2/a`. The eccentric orbit is described by
+The stellar radii entered in solar radii, either manually or through the spectral-type presets, are converted to fractional radii `R1/a` and `R2/a`. The eccentric orbit is described by
 
 ```text
 r/a = (1 - e^2) / (1 + e cos nu)
@@ -426,16 +426,24 @@ theta = nu + omega
 d_proj/a = (r/a) sqrt[cos^2(theta) + sin^2(theta) cos^2(i)]
 ```
 
-where `d_proj` is the projected separation of the two stellar disks. The eclipse depth is estimated from the overlap area of two circles, scaled by a simple surface-brightness proxy:
+where `d_proj` is the projected separation of the two stellar disks. The eclipse depth is estimated from the overlap area of two circles, scaled by a simple surface-brightness proxy. If stellar luminosities are available, the toy model uses
+
+```text
+S2 / S1 ~ (L2 / R2^2) / (L1 / R1^2)
+```
+
+where `S` is a disk-averaged surface-brightness proxy. For manual exploration, luminosity may be entered directly. The spectral-type presets provide approximate `M`, `R`, `L`, and `Teff` values for OB stars and for A, F, G, K, and M stars in luminosity classes V, III, and I. The temperature-only blackbody scaling,
 
 ```text
 S2 / S1 ~ (T2 / T1)^4
 ```
 
+is still reported as a diagnostic, but luminosity and radius control the displayed physical eclipse proxy.
+
 The displayed fit is
 
 ```text
-y(phi) = C + A Q(phi; e, omega, i, R1/a, R2/a, T2/T1, u1, u2, L3)
+y(phi) = C + A Q(phi; e, omega, i, R1/a, R2/a, L2/L1, S2/S1, u1, u2, L3)
 ```
 
 where `Q` is the geometric eclipse proxy. Optional ellipsoidal, reflection, and beaming terms can be added as simple sinusoidal proxies:
@@ -444,7 +452,7 @@ where `Q` is the geometric eclipse proxy. Optional ellipsoidal, reflection, and 
 Q = Q_eclipse + E cos(4 pi phi) + R cos(2 pi phi) + B sin(2 pi phi)
 ```
 
-Only the vertical offset `C` and scale `A` are fitted automatically. The physical parameters are user-controlled and should be interpreted as pedagogical diagnostics unless a proper physical solver and external constraints are used.
+Only the vertical offset `C` and scale `A` are fitted automatically. The physical parameters are user-controlled and should be interpreted as pedagogical diagnostics unless a proper physical solver and external constraints are used. The preset values are intentionally approximate: they help students see how mass changes the orbital scale, how radius changes eclipse probability and duration, and how luminosity/temperature changes eclipse depth.
 
 ### Parameters
 
@@ -481,11 +489,20 @@ Physical eclipse toy parameters controlling the orbital shape, orientation of pe
 **M1 / M2**
 Component masses. They set the semi-major axis through Kepler's law and therefore change the fractional radii for fixed input radii.
 
+**Primary / Secondary spectral type**
+Optional stellar presets for the two components. Choose `Manual` to edit physical quantities directly, or choose approximate spectral subclasses from O, B, A, F, G, K, and M.
+
+**Primary / Secondary luminosity class**
+Luminosity class for the preset: V, III, or I. This changes the typical stellar mass, radius, luminosity, and effective temperature.
+
 **R1 / R2**
 Component radii in solar radii. Larger fractional radii produce broader and more likely eclipses.
 
 **T1 / T2**
-Effective temperatures used only as a surface-brightness proxy.
+Effective temperatures. They are displayed and used as a blackbody diagnostic; with presets or entered luminosities, the model surface-brightness proxy is mainly driven by `L/R^2`.
+
+**L1 / L2**
+Bolometric luminosities in solar luminosities. They set the relative surface-brightness proxy through `(L2/R2^2)/(L1/R1^2)`, which affects the relative eclipse depths.
 
 **u1 / u2**
 Linear limb-darkening coefficients. Larger values reduce the disk-averaged occulted surface brightness in this simplified implementation.
@@ -532,7 +549,9 @@ The toy wind law then uses
 v_w(r) = v_inf * (1 - R_donor / r)^beta
 ```
 
-implemented internally as a normalized ratio. The fitted parameters remain pedagogical and phenomenological unless physical masses, wind laws, inclination, and independent orbital constraints are available.
+implemented internally as a normalized ratio. In `v_inf` mode, `R_donor/a` is computed from the physical donor radius and the semi-major axis. In dimensionless `v_wind / v_orb` mode, `R_donor/a` is entered directly. The fitted parameters remain pedagogical and phenomenological unless physical masses, wind laws, inclination, and independent orbital constraints are available.
+
+The donor spectral-type presets provide approximate stellar masses, radii, luminosities, and effective temperatures for quick classroom exploration. They include OB stars and representative A, F, G, K, and M stars. They are useful starting values, not a replacement for system-specific stellar calibrations.
 
 ### Parameters
 
@@ -554,8 +573,14 @@ Selects whether the model uses a dimensionless `v_wind / v_orb` ratio or physica
 **v_wind / v_orb**
 Ratio of wind speed to characteristic orbital speed. This is the original dimensionless toy-model parameter.
 
+**Donor radius / a**
+Dimensionless donor radius used in the beta-law wind acceleration term when the wind speed is entered as `v_wind / v_orb`.
+
 **v_inf [km/s]**
 Terminal wind speed used to derive an effective `v_wind / v_orb` ratio.
+
+**Donor spectral type / Luminosity class**
+Optional preset for typical donor mass, radius, luminosity, and effective temperature. The available presets cover OB and representative A, F, G, K, and M stars for luminosity classes V, III, and I. Choose `Manual` to edit mass and radius directly.
 
 **Donor mass [Msun]**
 Mass of the donor star used in Kepler's third law.

@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from app import advanced_time_frequency_map, binary_model_lab, bondi_hoyle_model_lab, fits_table_metadata, fourier_model_lab, is_fits_upload, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
+from app import BHL_DONOR_PRESETS, __version__, advanced_time_frequency_map, bhl_donor_preset_values, binary_model_lab, bondi_hoyle_model_lab, fits_table_metadata, fourier_model_lab, is_fits_upload, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
 
 
 st.set_page_config(
@@ -1669,12 +1669,44 @@ def model_lab_controls(prefix: str, location=st) -> None:
         st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] = "ratio" if wind_mode == "v_wind / v_orb" else "v_inf"
         if st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] == "ratio":
             cols[1].number_input("v_wind / v_orb", min_value=0.05, max_value=20.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_speed_ratio", 3.0), step=0.1, format="%.3f", key=f"{prefix}_model_lab_bh_wind_speed_ratio")
+            location.number_input("Donor radius / a", min_value=0.001, max_value=0.95, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_radius_over_a", 0.15), step=0.01, format="%.3f", key=f"{prefix}_model_lab_bh_donor_radius_over_a")
         else:
             cols[1].number_input("v_inf [km/s]", min_value=1.0, max_value=5000.0, value=st.session_state.get(f"{prefix}_model_lab_bh_vinf", 1000.0), step=50.0, format="%.1f", key=f"{prefix}_model_lab_bh_vinf")
+            donor_options = ["Manual"] + list(BHL_DONOR_PRESETS.keys())
+            preset_cols = location.columns(2)
+            preset_cols[0].selectbox(
+                "Donor spectral type",
+                donor_options,
+                index=donor_options.index(st.session_state.get(f"{prefix}_model_lab_bh_donor_spectral_type", "Manual"))
+                if st.session_state.get(f"{prefix}_model_lab_bh_donor_spectral_type", "Manual") in donor_options
+                else 0,
+                key=f"{prefix}_model_lab_bh_donor_spectral_type",
+            )
+            preset_cols[1].selectbox(
+                "Luminosity class",
+                ["V", "III", "I"],
+                index=["V", "III", "I"].index(st.session_state.get(f"{prefix}_model_lab_bh_donor_luminosity_class", "V"))
+                if st.session_state.get(f"{prefix}_model_lab_bh_donor_luminosity_class", "V") in ["V", "III", "I"]
+                else 0,
+                key=f"{prefix}_model_lab_bh_donor_luminosity_class",
+            )
+            preset = bhl_donor_preset_values(
+                st.session_state.get(f"{prefix}_model_lab_bh_donor_spectral_type", "Manual"),
+                st.session_state.get(f"{prefix}_model_lab_bh_donor_luminosity_class", "V"),
+            )
+            if preset is not None:
+                st.session_state[f"{prefix}_model_lab_bh_donor_mass"] = float(preset["mass_msun"])
+                st.session_state[f"{prefix}_model_lab_bh_donor_radius"] = float(preset["radius_rsun"])
+                location.caption(
+                    "Typical donor values loaded: "
+                    f"M={float(preset['mass_msun']):.4g} Msun, R={float(preset['radius_rsun']):.4g} Rsun. "
+                    "Switch spectral type to Manual to edit them freely."
+                )
             physical_cols = location.columns(3)
-            physical_cols[0].number_input("Donor mass [Msun]", min_value=0.1, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_mass", 18.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_mass")
+            preset_active = preset is not None
+            physical_cols[0].number_input("Donor mass [Msun]", min_value=0.1, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_mass", 18.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_mass", disabled=preset_active)
             physical_cols[1].number_input("Compact mass [Msun]", min_value=0.1, max_value=50.0, value=st.session_state.get(f"{prefix}_model_lab_bh_compact_mass", 1.4), step=0.1, format="%.2f", key=f"{prefix}_model_lab_bh_compact_mass")
-            physical_cols[2].number_input("Donor radius [Rsun]", min_value=0.1, max_value=200.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_radius", 8.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_radius")
+            physical_cols[2].number_input("Donor radius [Rsun]", min_value=0.1, max_value=2000.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_radius", 8.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_radius", disabled=preset_active)
         location.number_input("Wind beta", min_value=0.0, max_value=5.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_beta", 0.8), step=0.1, format="%.2f", key=f"{prefix}_model_lab_bh_wind_beta")
         cols = location.columns(3)
         cols[0].checkbox("Fit eccentricity", value=st.session_state.get(f"{prefix}_model_lab_bh_fit_eccentricity", True), key=f"{prefix}_model_lab_bh_fit_eccentricity")
@@ -1694,7 +1726,10 @@ def model_lab_controls(prefix: str, location=st) -> None:
                 "model_lab_bh_eccentricity": str(st.session_state.get(f"{prefix}_model_lab_bh_eccentricity", 0.3)),
                 "model_lab_bh_wind_input_mode": st.session_state.get(f"{prefix}_model_lab_bh_wind_input_mode", "v_inf"),
                 "model_lab_bh_wind_speed_ratio": str(st.session_state.get(f"{prefix}_model_lab_bh_wind_speed_ratio", 3.0)),
+                "model_lab_bh_donor_radius_over_a": str(st.session_state.get(f"{prefix}_model_lab_bh_donor_radius_over_a", 0.15)),
                 "model_lab_bh_vinf": str(st.session_state.get(f"{prefix}_model_lab_bh_vinf", 1000.0)),
+                "model_lab_bh_donor_spectral_type": st.session_state.get(f"{prefix}_model_lab_bh_donor_spectral_type", "Manual"),
+                "model_lab_bh_donor_luminosity_class": st.session_state.get(f"{prefix}_model_lab_bh_donor_luminosity_class", "V"),
                 "model_lab_bh_donor_mass": str(st.session_state.get(f"{prefix}_model_lab_bh_donor_mass", 18.0)),
                 "model_lab_bh_compact_mass": str(st.session_state.get(f"{prefix}_model_lab_bh_compact_mass", 1.4)),
                 "model_lab_bh_donor_radius": str(st.session_state.get(f"{prefix}_model_lab_bh_donor_radius", 8.0)),
@@ -1754,15 +1789,86 @@ def model_lab_controls(prefix: str, location=st) -> None:
         cols[0].number_input("Eccentricity", min_value=0.0, max_value=0.9, value=st.session_state.get(f"{prefix}_model_lab_binary_physical_eccentricity", 0.0), step=0.05, format="%.3f", key=f"{prefix}_model_lab_binary_physical_eccentricity")
         cols[1].number_input("Omega [deg]", min_value=0.0, max_value=360.0, value=st.session_state.get(f"{prefix}_model_lab_binary_omega", 90.0), step=5.0, format="%.1f", key=f"{prefix}_model_lab_binary_omega")
         cols[2].number_input("Inclination [deg]", min_value=0.0, max_value=90.0, value=st.session_state.get(f"{prefix}_model_lab_binary_inclination", 85.0), step=1.0, format="%.1f", key=f"{prefix}_model_lab_binary_inclination")
+        spectral_options = ["Manual"] + list(BHL_DONOR_PRESETS.keys())
+        class_options = ["V", "III", "I"]
+        location.caption("Optional stellar presets provide typical pedagogical M, R, L, and Teff values.")
         cols = location.columns(2)
-        cols[0].number_input("M1 [Msun]", min_value=0.05, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_binary_mass1", 10.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_binary_mass1")
-        cols[1].number_input("M2 [Msun]", min_value=0.05, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_binary_mass2", 1.4), step=0.1, format="%.2f", key=f"{prefix}_model_lab_binary_mass2")
+        cols[0].selectbox(
+            "Primary spectral type",
+            spectral_options,
+            index=spectral_options.index(st.session_state.get(f"{prefix}_model_lab_binary_primary_spectral_type", "Manual"))
+            if st.session_state.get(f"{prefix}_model_lab_binary_primary_spectral_type", "Manual") in spectral_options
+            else 0,
+            key=f"{prefix}_model_lab_binary_primary_spectral_type",
+        )
+        cols[1].selectbox(
+            "Primary luminosity class",
+            class_options,
+            index=class_options.index(st.session_state.get(f"{prefix}_model_lab_binary_primary_luminosity_class", "V"))
+            if st.session_state.get(f"{prefix}_model_lab_binary_primary_luminosity_class", "V") in class_options
+            else 0,
+            key=f"{prefix}_model_lab_binary_primary_luminosity_class",
+        )
         cols = location.columns(2)
-        cols[0].number_input("R1 [Rsun]", min_value=0.01, max_value=300.0, value=st.session_state.get(f"{prefix}_model_lab_binary_radius1", 6.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_binary_radius1")
-        cols[1].number_input("R2 [Rsun]", min_value=0.01, max_value=300.0, value=st.session_state.get(f"{prefix}_model_lab_binary_radius2", 1.0), step=0.1, format="%.2f", key=f"{prefix}_model_lab_binary_radius2")
+        cols[0].selectbox(
+            "Secondary spectral type",
+            spectral_options,
+            index=spectral_options.index(st.session_state.get(f"{prefix}_model_lab_binary_secondary_spectral_type", "Manual"))
+            if st.session_state.get(f"{prefix}_model_lab_binary_secondary_spectral_type", "Manual") in spectral_options
+            else 0,
+            key=f"{prefix}_model_lab_binary_secondary_spectral_type",
+        )
+        cols[1].selectbox(
+            "Secondary luminosity class",
+            class_options,
+            index=class_options.index(st.session_state.get(f"{prefix}_model_lab_binary_secondary_luminosity_class", "V"))
+            if st.session_state.get(f"{prefix}_model_lab_binary_secondary_luminosity_class", "V") in class_options
+            else 0,
+            key=f"{prefix}_model_lab_binary_secondary_luminosity_class",
+        )
+        primary_preset = bhl_donor_preset_values(
+            st.session_state.get(f"{prefix}_model_lab_binary_primary_spectral_type", "Manual"),
+            st.session_state.get(f"{prefix}_model_lab_binary_primary_luminosity_class", "V"),
+        )
+        secondary_preset = bhl_donor_preset_values(
+            st.session_state.get(f"{prefix}_model_lab_binary_secondary_spectral_type", "Manual"),
+            st.session_state.get(f"{prefix}_model_lab_binary_secondary_luminosity_class", "V"),
+        )
+        if primary_preset is not None:
+            st.session_state[f"{prefix}_model_lab_binary_mass1"] = float(primary_preset["mass_msun"])
+            st.session_state[f"{prefix}_model_lab_binary_radius1"] = float(primary_preset["radius_rsun"])
+            st.session_state[f"{prefix}_model_lab_binary_temperature1"] = float(primary_preset["teff_k"])
+            st.session_state[f"{prefix}_model_lab_binary_luminosity1"] = float(primary_preset["luminosity_lsun"])
+        if secondary_preset is not None:
+            st.session_state[f"{prefix}_model_lab_binary_mass2"] = float(secondary_preset["mass_msun"])
+            st.session_state[f"{prefix}_model_lab_binary_radius2"] = float(secondary_preset["radius_rsun"])
+            st.session_state[f"{prefix}_model_lab_binary_temperature2"] = float(secondary_preset["teff_k"])
+            st.session_state[f"{prefix}_model_lab_binary_luminosity2"] = float(secondary_preset["luminosity_lsun"])
+        active_presets = []
+        if primary_preset is not None:
+            active_presets.append(
+                f"primary M={float(primary_preset['mass_msun']):.4g} Msun, R={float(primary_preset['radius_rsun']):.4g} Rsun, "
+                f"L={float(primary_preset['luminosity_lsun']):.4g} Lsun, Teff={float(primary_preset['teff_k']):.5g} K"
+            )
+        if secondary_preset is not None:
+            active_presets.append(
+                f"secondary M={float(secondary_preset['mass_msun']):.4g} Msun, R={float(secondary_preset['radius_rsun']):.4g} Rsun, "
+                f"L={float(secondary_preset['luminosity_lsun']):.4g} Lsun, Teff={float(secondary_preset['teff_k']):.5g} K"
+            )
+        if active_presets:
+            location.caption("Loaded preset values: " + "; ".join(active_presets) + ". Switch the corresponding spectral type to Manual to edit freely.")
         cols = location.columns(2)
-        cols[0].number_input("T1 [K]", min_value=1.0, max_value=100000.0, value=st.session_state.get(f"{prefix}_model_lab_binary_temperature1", 20000.0), step=500.0, format="%.0f", key=f"{prefix}_model_lab_binary_temperature1")
-        cols[1].number_input("T2 [K]", min_value=1.0, max_value=100000.0, value=st.session_state.get(f"{prefix}_model_lab_binary_temperature2", 8000.0), step=500.0, format="%.0f", key=f"{prefix}_model_lab_binary_temperature2")
+        cols[0].number_input("M1 [Msun]", min_value=0.05, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_binary_mass1", 10.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_binary_mass1", disabled=primary_preset is not None)
+        cols[1].number_input("M2 [Msun]", min_value=0.05, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_binary_mass2", 1.4), step=0.1, format="%.2f", key=f"{prefix}_model_lab_binary_mass2", disabled=secondary_preset is not None)
+        cols = location.columns(2)
+        cols[0].number_input("R1 [Rsun]", min_value=0.01, max_value=2000.0, value=st.session_state.get(f"{prefix}_model_lab_binary_radius1", 6.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_binary_radius1", disabled=primary_preset is not None)
+        cols[1].number_input("R2 [Rsun]", min_value=0.01, max_value=2000.0, value=st.session_state.get(f"{prefix}_model_lab_binary_radius2", 1.0), step=0.1, format="%.2f", key=f"{prefix}_model_lab_binary_radius2", disabled=secondary_preset is not None)
+        cols = location.columns(2)
+        cols[0].number_input("T1 [K]", min_value=1.0, max_value=100000.0, value=st.session_state.get(f"{prefix}_model_lab_binary_temperature1", 20000.0), step=500.0, format="%.0f", key=f"{prefix}_model_lab_binary_temperature1", disabled=primary_preset is not None)
+        cols[1].number_input("T2 [K]", min_value=1.0, max_value=100000.0, value=st.session_state.get(f"{prefix}_model_lab_binary_temperature2", 8000.0), step=500.0, format="%.0f", key=f"{prefix}_model_lab_binary_temperature2", disabled=secondary_preset is not None)
+        cols = location.columns(2)
+        cols[0].number_input("L1 [Lsun]", min_value=1e-6, max_value=1e7, value=st.session_state.get(f"{prefix}_model_lab_binary_luminosity1", 10000.0), step=10.0, format="%.6g", key=f"{prefix}_model_lab_binary_luminosity1", disabled=primary_preset is not None)
+        cols[1].number_input("L2 [Lsun]", min_value=1e-6, max_value=1e7, value=st.session_state.get(f"{prefix}_model_lab_binary_luminosity2", 10.0), step=1.0, format="%.6g", key=f"{prefix}_model_lab_binary_luminosity2", disabled=secondary_preset is not None)
         cols = location.columns(3)
         cols[0].number_input("u1", min_value=0.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_binary_limb_u1", 0.4), step=0.05, format="%.2f", key=f"{prefix}_model_lab_binary_limb_u1")
         cols[1].number_input("u2", min_value=0.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_binary_limb_u2", 0.4), step=0.05, format="%.2f", key=f"{prefix}_model_lab_binary_limb_u2")
@@ -1797,12 +1903,18 @@ def model_lab_controls(prefix: str, location=st) -> None:
             "model_lab_binary_physical_eccentricity": str(st.session_state.get(f"{prefix}_model_lab_binary_physical_eccentricity", 0.0)),
             "model_lab_binary_omega": str(st.session_state.get(f"{prefix}_model_lab_binary_omega", 90.0)),
             "model_lab_binary_inclination": str(st.session_state.get(f"{prefix}_model_lab_binary_inclination", 85.0)),
+            "model_lab_binary_primary_spectral_type": st.session_state.get(f"{prefix}_model_lab_binary_primary_spectral_type", "Manual"),
+            "model_lab_binary_primary_luminosity_class": st.session_state.get(f"{prefix}_model_lab_binary_primary_luminosity_class", "V"),
+            "model_lab_binary_secondary_spectral_type": st.session_state.get(f"{prefix}_model_lab_binary_secondary_spectral_type", "Manual"),
+            "model_lab_binary_secondary_luminosity_class": st.session_state.get(f"{prefix}_model_lab_binary_secondary_luminosity_class", "V"),
             "model_lab_binary_mass1": str(st.session_state.get(f"{prefix}_model_lab_binary_mass1", 10.0)),
             "model_lab_binary_mass2": str(st.session_state.get(f"{prefix}_model_lab_binary_mass2", 1.4)),
             "model_lab_binary_radius1": str(st.session_state.get(f"{prefix}_model_lab_binary_radius1", 6.0)),
             "model_lab_binary_radius2": str(st.session_state.get(f"{prefix}_model_lab_binary_radius2", 1.0)),
             "model_lab_binary_temperature1": str(st.session_state.get(f"{prefix}_model_lab_binary_temperature1", 20000.0)),
             "model_lab_binary_temperature2": str(st.session_state.get(f"{prefix}_model_lab_binary_temperature2", 8000.0)),
+            "model_lab_binary_luminosity1": str(st.session_state.get(f"{prefix}_model_lab_binary_luminosity1", 10000.0)),
+            "model_lab_binary_luminosity2": str(st.session_state.get(f"{prefix}_model_lab_binary_luminosity2", 10.0)),
             "model_lab_binary_limb_u1": str(st.session_state.get(f"{prefix}_model_lab_binary_limb_u1", 0.4)),
             "model_lab_binary_limb_u2": str(st.session_state.get(f"{prefix}_model_lab_binary_limb_u2", 0.4)),
             "model_lab_binary_third_light": str(st.session_state.get(f"{prefix}_model_lab_binary_third_light", 0.0)),
@@ -1937,14 +2049,26 @@ def render_binary_orbital_highlight(model_result: dict, app_result: dict) -> Non
         lines.append(f"<strong>Eccentricity:</strong> {float(summary.get('eccentricity', 0.0)):.4g}")
         lines.append(f"<strong>Omega:</strong> {float(summary.get('omega_deg', 0.0)):.5g} deg")
         lines.append(f"<strong>Inclination:</strong> {float(summary.get('inclination_deg', 0.0)):.5g} deg")
+        if summary.get("primary_spectral_type") != "manual" or summary.get("secondary_spectral_type") != "manual":
+            lines.append(
+                "<strong>Stellar presets:</strong> "
+                f"primary {summary.get('primary_spectral_type', 'manual')} {summary.get('primary_luminosity_class', '')}, "
+                f"secondary {summary.get('secondary_spectral_type', 'manual')} {summary.get('secondary_luminosity_class', '')}"
+            )
+        lines.append(
+            "<strong>Masses / radii:</strong> "
+            f"M1={float(summary.get('mass1_msun', 0.0)):.5g} Msun, M2={float(summary.get('mass2_msun', 0.0)):.5g} Msun, "
+            f"R1={float(summary.get('radius1_rsun', 0.0)):.5g} Rsun, R2={float(summary.get('radius2_rsun', 0.0)):.5g} Rsun"
+        )
         lines.append(f"<strong>Mass ratio q=M2/M1:</strong> {float(summary.get('mass_ratio_q_m2_over_m1', 0.0)):.5g}")
         lines.append(f"<strong>Semi-major axis:</strong> {float(summary.get('semi_major_axis_rsun', 0.0)):.5g} Rsun")
         lines.append(f"<strong>Radii:</strong> R1/a={float(summary.get('radius1_over_a', 0.0)):.5g}, R2/a={float(summary.get('radius2_over_a', 0.0)):.5g}")
         lines.append(f"<strong>Temperature ratio T2/T1:</strong> {float(summary.get('temperature_ratio_t2_over_t1', 0.0)):.5g}")
-        lines.append(f"<strong>Flux ratio F2/F1:</strong> {float(summary.get('brightness_ratio_f2_over_f1', 0.0)):.5g}")
+        lines.append(f"<strong>Luminosity ratio L2/L1:</strong> {float(summary.get('bolometric_luminosity_ratio_l2_over_l1', 0.0)):.5g}")
+        lines.append(f"<strong>Surface brightness ratio S2/S1:</strong> {float(summary.get('surface_brightness_ratio_s2_over_s1', 0.0)):.5g}")
         lines.append(f"<strong>Third light fraction:</strong> {float(summary.get('third_light_fraction', 0.0)):.5g}")
         lines.append(f"<strong>Eclipse geometry:</strong> {summary.get('eclipse_possible', 'unknown')}")
-        lines.append("<strong>Pedagogical hint:</strong> masses set the orbital scale through Kepler's law, radii and inclination set whether eclipses occur, and temperatures/third light dilute or deepen the eclipses.")
+        lines.append("<strong>Pedagogical hint:</strong> masses set the orbital scale through Kepler's law, radii and inclination set whether eclipses occur, and luminosities, surface brightness, limb darkening, and third light dilute or deepen the eclipses.")
     elif model_result.get("model_kind") == "eccentric_harmonic":
         eccentricity = summary.get("eccentricity")
         if eccentricity is not None:
@@ -2003,8 +2127,13 @@ def render_bondi_hoyle_highlight(model_result: dict, app_result: dict) -> None:
         f"<strong>Eccentricity:</strong> {float(summary.get('eccentricity', 0.0)):.4g}",
         f"<strong>Effective v_wind / v_orb:</strong> {float(summary.get('wind_speed_ratio', 0.0)):.4g}",
         f"<strong>Wind beta:</strong> {float(summary.get('wind_beta', 0.0)):.4g}",
+        f"<strong>Wind launch radius R_donor/a:</strong> {float(summary.get('donor_radius_over_a', 0.0)):.5g}",
         f"<strong>Phase lag:</strong> {float(summary.get('phase_lag', 0.0)):+.5g}",
     ]
+    if summary.get("donor_spectral_type"):
+        lines.append(
+            f"<strong>Donor preset:</strong> {summary.get('donor_spectral_type')} {summary.get('donor_luminosity_class', '')}"
+        )
     if summary.get("wind_input_mode") == "v_inf":
         lines.extend([
             f"<strong>v_inf:</strong> {float(summary.get('v_inf_km_s', 0.0)):.5g} km/s",
@@ -2250,6 +2379,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
 def layout_one() -> None:
     prefix = "l1"
     st.title("Periodicity Workbench")
+    st.caption(f"Version {__version__}")
     with st.sidebar:
         with st.expander("Input", expanded=True):
             input_controls(prefix, st)
