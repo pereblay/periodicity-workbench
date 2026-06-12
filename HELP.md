@@ -1,13 +1,13 @@
 # Overview
 
-Periodicity Workbench is an interactive tool for exploring periodic signals in unevenly sampled light curves. It was designed around the workflow that often appears in optical and X-ray time-series analysis: load a text light curve, search for periods with a Lomb-Scargle periodogram, check whether peaks may be caused by the sampling pattern, fold the data, model the folded profile, remove known signals by prewhitening, and then explore more specialized physical or pedagogical models.
+Periodicity Workbench is an interactive tool for exploring periodic signals in unevenly sampled light curves. It was designed around the workflow that often appears in optical and X-ray time-series analysis: load a light-curve table, search for periods with a Lomb-Scargle periodogram, check whether peaks may be caused by the sampling pattern, fold the data, model the folded profile, remove known signals by prewhitening, and then explore more specialized physical or pedagogical models.
 
 The tool is intentionally exploratory. It can help identify candidate periods, aliases, harmonics, sampling-window artefacts, time-dependent period changes, and simple phenomenological models. It should not be treated as a replacement for a final publication-grade physical solution. The results are best used as a guide for deciding what deserves a more careful analysis.
 
 ## General Workflow
 
-1. Upload a plain ASCII text table.
-2. Select the columns containing time, flux or count rate, and optionally error.
+1. Upload an ASCII numeric table or a FITS table.
+2. Select the columns containing time, flux/count rate/magnitude, and optionally error.
 3. Choose time units: days or seconds.
 4. Set a frequency range for the Lomb-Scargle search.
 5. Run the main analysis.
@@ -19,7 +19,7 @@ The tool is intentionally exploratory. It can help identify candidate periods, a
 
 ## Input
 
-The input file can be either a plain ASCII table with numeric columns or a FITS table. The app accepts text files with `.txt`, `.dat`, `.lc`, or no extension. FITS files are detected from their content, so common extensions such as `.fits`, `.fit`, `.fts`, `.ftz`, `.lc`, or compressed FITS-like uploads can be used as long as the file contains a valid FITS payload. In text files, comment lines beginning with `#` or `%` are ignored.
+The input file can be either a plain ASCII table with numeric columns or a FITS table. The app accepts ASCII files with `.txt`, `.dat`, `.lc`, or no extension. FITS files are detected from their content, so common extensions such as `.fits`, `.fit`, `.fts`, `.ftz`, `.lc`, or compressed FITS-like uploads can be used as long as the file contains a valid FITS payload. In ASCII files, comment lines beginning with `#` or `%` are ignored.
 
 For ASCII uploads, the app rejects files containing non-ASCII bytes, control characters, or command-like text. This is a basic safety check intended to avoid treating executable or shell-like content as a data file. FITS uploads are opened with `astropy.io.fits` and only scalar numeric table columns are offered for analysis.
 
@@ -28,10 +28,10 @@ When a FITS file is uploaded, the workspace preview shows the available table ex
 ### Parameters
 
 **Time**
-Column number containing the observation time.
+Column number, or FITS column name, containing the observation time.
 
 **Flux**
-Column number containing the measured signal. This may be a flux, count rate, magnitude, or any scalar observable.
+Column number, or FITS column name, containing the measured signal. This may be a flux, count rate, magnitude, or any scalar observable.
 
 **Error**
 Column number, or FITS column name, containing the uncertainty on the measured signal. This can be disabled with **Use error column**.
@@ -252,9 +252,9 @@ Manual period entered by the user. If provided, it overrides the dropdown select
 Adds the selected period to the prewhitening chain and recomputes the residual periodogram.
 
 **Show model**
-Displays the original data, the prewhitening model evaluated at the data points, a full continuous model, and the O-C residuals.
+Displays the original data, the prewhitening model evaluated at the data points, a full continuous model, and the residuals.
 
-**Show model and O-C errors**
+**Show errors**
 Toggles error bars in the model and residual plots.
 
 **Clear chain**
