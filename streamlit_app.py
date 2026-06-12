@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -9,7 +10,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from app import BHL_DONOR_PRESETS, __version__, advanced_time_frequency_map, bhl_donor_preset_values, binary_model_lab, bondi_hoyle_model_lab, fits_table_metadata, fourier_model_lab, is_fits_upload, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
+from app import BHL_DONOR_PRESETS, advanced_time_frequency_map, bhl_donor_preset_values, binary_model_lab, bondi_hoyle_model_lab, fits_table_metadata, fourier_model_lab, is_fits_upload, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
+
+
+try:
+    APP_VERSION = (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip()
+except OSError:
+    APP_VERSION = "1.0.0"
 
 
 st.set_page_config(
@@ -2379,7 +2386,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
 def layout_one() -> None:
     prefix = "l1"
     st.title("Periodicity Workbench")
-    st.caption(f"Version {__version__}")
+    st.caption(f"Version {APP_VERSION}")
     with st.sidebar:
         with st.expander("Input", expanded=True):
             input_controls(prefix, st)
