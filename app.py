@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".matplotlib"))
 
 import matplotlib

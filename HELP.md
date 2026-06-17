@@ -98,11 +98,11 @@ N_f ~ (f_max - f_min) T * samples_per_peak
 **Max considered peaks**
 Maximum number of Lomb-Scargle peaks reported as candidates.
 
-**Minimum considered period**
+**Min. considered period**
 Peaks with periods shorter than this value are not considered as primary candidates. This is useful for suppressing known short-period aliases, such as daily sampling features.
 
 **Sampling-window threshold**
-Minimum sampling-window power required for a window peak to be considered important.
+Min. sampling-window power required for a window peak to be considered important.
 
 **Sampling-window tolerance**
 Relative tolerance used to decide whether a Lomb-Scargle peak is close enough to a sampling-window peak to be flagged as an artefact.
@@ -302,7 +302,7 @@ Width of each sliding time window.
 **Window step**
 Spacing between consecutive window centers.
 
-**Minimum points per window**
+**Min. points per window**
 Windows with fewer points are skipped.
 
 **Color metric**

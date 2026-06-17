@@ -16,7 +16,7 @@ from app import BHL_DONOR_PRESETS, advanced_time_frequency_map, bhl_donor_preset
 try:
     APP_VERSION = (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip()
 except OSError:
-    APP_VERSION = "1.0.0"
+    APP_VERSION = "1.2.0"
 
 
 st.set_page_config(
@@ -28,15 +28,18 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+    :root {
+        --periodicity-sidebar-width: 28.5rem;
+    }
     [data-testid="stSidebar"] {
-        width: 31rem !important;
-        min-width: 31rem !important;
-        max-width: 31rem !important;
+        width: var(--periodicity-sidebar-width) !important;
+        min-width: var(--periodicity-sidebar-width) !important;
+        max-width: var(--periodicity-sidebar-width) !important;
         height: 100vh !important;
         overflow: hidden !important;
     }
     [data-testid="stSidebar"] > div:first-child {
-        width: 31rem !important;
+        width: var(--periodicity-sidebar-width) !important;
     }
     [data-testid="stSidebar"] > div:first-child,
     [data-testid="stSidebarContent"] {
@@ -56,6 +59,23 @@ st.markdown(
     }
     [data-testid="stSidebar"] [data-testid="stCheckbox"] label,
     [data-testid="stSidebar"] [data-testid="stCheckbox"] label p {
+        white-space: normal !important;
+        overflow-wrap: normal !important;
+        word-break: normal !important;
+        hyphens: none !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stNumberInput"] label,
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stTextInput"] label,
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stSelectbox"] label {
+        min-height: 1.35rem !important;
+        margin-bottom: 0.05rem !important;
+        align-items: flex-start !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stNumberInput"] label p,
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stTextInput"] label p,
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"] [data-testid="stSelectbox"] label p {
+        line-height: 1.12 !important;
+        margin-bottom: 0 !important;
         white-space: normal !important;
         overflow-wrap: normal !important;
         word-break: normal !important;
@@ -135,13 +155,23 @@ STATE_KEYS = [
 HELP_FILE = "HELP.md"
 
 
+def return_from_help_button(key: str) -> None:
+    if st.button("Back to results", use_container_width=True, key=key):
+        st.session_state["app_show_help"] = False
+        st.rerun()
+
+
 def render_help_document() -> None:
+    st.divider()
+    return_from_help_button("app_help_back_top")
     st.divider()
     try:
         with open(HELP_FILE, "r", encoding="utf-8") as handle:
             st.markdown(handle.read())
     except OSError:
         st.error("Help documentation is not available in this deployment.")
+    st.divider()
+    return_from_help_button("app_help_back_bottom")
 
 
 def file_signature(uploaded_file) -> tuple[str, int, str]:
@@ -1210,7 +1240,7 @@ def search_controls(prefix: str, location=st) -> None:
     cols[1].number_input("Sampling-window tolerance", min_value=0.001, value=st.session_state.get(f"{prefix}_window_tolerance", 0.01), step=0.001, format="%.3f", key=f"{prefix}_window_tolerance")
     cols = location.columns(2)
     cols[0].number_input("Samples per peak", min_value=1.0, value=st.session_state.get(f"{prefix}_samples_per_peak", 10.0), step=1.0, key=f"{prefix}_samples_per_peak")
-    cols[1].number_input(f"Minimum considered {axis_labels(time_unit)['period']}", min_value=0.0, value=st.session_state.get(f"{prefix}_min_period", 2.0), step=0.1, key=f"{prefix}_min_period")
+    cols[1].number_input(f"Min. considered {axis_labels(time_unit)['period']}", min_value=0.0, value=st.session_state.get(f"{prefix}_min_period", 2.0), step=0.1, key=f"{prefix}_min_period")
 
 
 def uncertainty_controls(prefix: str, location=st) -> None:
@@ -1445,7 +1475,7 @@ def advanced_controls(prefix: str, location=st) -> None:
     cols[0].number_input("Period bins", min_value=20, max_value=1000, value=st.session_state.get(f"{prefix}_advanced_bins", 200), step=20, key=f"{prefix}_advanced_bins")
     cols[1].number_input(f"Window width [{time_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_width", 100.0), step=10.0, key=f"{prefix}_advanced_width")
     cols[2].number_input(f"Window step [{time_unit}]", min_value=0.0, value=st.session_state.get(f"{prefix}_advanced_step", 25.0), step=5.0, key=f"{prefix}_advanced_step")
-    location.number_input("Minimum points per window", min_value=3, value=st.session_state.get(f"{prefix}_advanced_min_points", 30), step=5, key=f"{prefix}_advanced_min_points")
+    location.number_input("Min. points per window", min_value=3, value=st.session_state.get(f"{prefix}_advanced_min_points", 30), step=5, key=f"{prefix}_advanced_min_points")
     if st.session_state[f"{prefix}_advanced_method"] == "v1":
         location.selectbox("Color metric", ["power", "amplitude"], key=f"{prefix}_advanced_metric")
         constrain_track = location.checkbox(

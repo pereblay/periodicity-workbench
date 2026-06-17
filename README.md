@@ -2,7 +2,7 @@
 
 Streamlit version of the local Periodicity Workbench app.
 
-Current version: `1.0.0`.
+Current version: `1.2.0`.
 
 It supports:
 
