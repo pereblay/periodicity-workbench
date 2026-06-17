@@ -156,7 +156,7 @@ HELP_FILE = "HELP.md"
 
 
 def return_from_help_button(key: str) -> None:
-    if st.button("Back to results", use_container_width=True, key=key):
+    if st.button("Back to analysis", use_container_width=True, key=key):
         st.session_state["app_show_help"] = False
         st.rerun()
 
