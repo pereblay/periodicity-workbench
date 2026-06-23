@@ -287,6 +287,24 @@ def preferred_fits_column(columns: list[str], keywords: list[str], fallback_inde
     return columns[min(fallback_index, len(columns) - 1)]
 
 
+def preferred_fits_extension(metadata: list[dict]) -> int:
+    def score(row: dict) -> tuple[int, int, int, int, int]:
+        column_names = [str(column["name"]).upper() for column in row.get("columns", [])]
+        has_time = any(name in column_names for name in ["TIME", "MJD", "JD", "BJD"])
+        has_flux = any(
+            name in column_names
+            for name in ["RATE", "COUNT_RATE", "FLUX", "MAG", "COUNTS", "TOT_COUNTS"]
+        )
+        has_error = any(
+            name in column_names
+            for name in ["ERROR", "ERR", "RATE_ERR", "FLUX_ERR", "MAG_ERR", "SIGMA"]
+        )
+        n_rows = int(row.get("n_rows", 0))
+        return (int(n_rows >= 10), int(has_time), int(has_flux), int(has_error), n_rows)
+
+    return int(max(metadata, key=score)["index"])
+
+
 def render_fits_selector(prefix: str, file_bytes: bytes, filename: str) -> None:
     if not is_fits_upload(filename, file_bytes):
         return
@@ -294,9 +312,10 @@ def render_fits_selector(prefix: str, file_bytes: bytes, filename: str) -> None:
     st.caption("FITS table selection")
     extension_options = [row["index"] for row in metadata]
     extension_by_index = {row["index"]: row for row in metadata}
+    preferred_extension = preferred_fits_extension(metadata)
     current_extension = st.session_state.get(f"{prefix}_fits_extension")
     if current_extension not in extension_options:
-        current_extension = extension_options[0]
+        current_extension = preferred_extension
         st.session_state[f"{prefix}_fits_extension"] = current_extension
     selected_extension = st.selectbox(
         "FITS extension",
@@ -310,7 +329,7 @@ def render_fits_selector(prefix: str, file_bytes: bytes, filename: str) -> None:
     column_names = [row["name"] for row in column_rows]
     for key_suffix, keywords, fallback in [
         ("fits_time_col", ["TIME", "MJD", "JD", "BJD"], 0),
-        ("fits_flux_col", ["RATE", "COUNT_RATE", "FLUX", "MAG", "COUNTS"], 1),
+        ("fits_flux_col", ["RATE", "COUNT_RATE", "FLUX", "MAG", "COUNTS", "TOT_COUNTS"], 1),
         ("fits_error_col", ["ERROR", "ERR", "RATE_ERR", "FLUX_ERR", "MAG_ERR", "SIGMA"], 2),
     ]:
         key = f"{prefix}_{key_suffix}"

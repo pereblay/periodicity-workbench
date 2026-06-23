@@ -361,8 +361,14 @@ def read_fits_columns(
         else:
             dy = np.ones_like(y, dtype=float)
             good = np.isfinite(t) & np.isfinite(y)
-        if good.sum() < 10:
-            raise ValueError("Need at least 10 valid FITS rows after filtering finite values")
+        valid_rows = int(good.sum())
+        if valid_rows < 10:
+            error_detail = f", error column '{error_column}'" if error_column else ", no error column"
+            raise ValueError(
+                "Need at least 10 valid FITS rows after filtering finite values; "
+                f"got {valid_rows} in extension {extension} with time column '{time_column}', "
+                f"flux column '{flux_column}'{error_detail}."
+            )
         t, y, dy = t[good], y[good], dy[good]
         order = np.argsort(t)
         return t[order], y[order], dy[order]
