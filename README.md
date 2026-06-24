@@ -9,6 +9,7 @@ It supports:
 - Uploading ASCII text tables with `.txt`, `.dat`, `.lc`, or no extension.
 - Uploading FITS-like tables detected by file content, including common `.fits`, `.fit`, `.fts`, `.ftz`, `.lc`, and `.fits.gz` files.
 - Choosing the time, flux/count-rate/magnitude, and optional error columns.
+- Previewing the selected table rows and original light curve before running the analysis.
 - Weighted Lomb-Scargle periodograms.
 - Sampling-window inspection and tentative artefact classification.
 - Local residual bootstrap errors for detected peaks.
@@ -20,6 +21,19 @@ It supports:
 - A model laboratory for Fourier multi-harmonic profiles, eclipsing/eccentric binary toy models, Bondi-Hoyle wind-accretion toy models, and X-ray pulse-period timing.
 - Stellar spectral-type presets for toy binary and wind-accretion models, including OB and A/F/G/K/M representative stars.
 - Download buttons for the plotted data tables.
+- Evidence boxes for student notes and literature comparisons.
+- Compact PDF report generation with selectable sections and optional append-to-existing-PDF support.
+
+## Student Report Workflow
+
+The built-in help includes a minimum student workflow:
+
+1. Load the light curve without error weighting for the first inspection.
+2. Run an initial frequency search and inspect the Lomb-Scargle periodogram, sampling window, and folded profile.
+3. Refine the frequency range and then enable uncertainty estimates.
+4. Investigate the folded profile and test whether harmonics improve the fit.
+5. Fill in the evidence boxes with adopted periods, uncertainties, and literature comparison.
+6. Generate a PDF report including the selected analysis sections.
 
 ## Model Laboratory Notes
 

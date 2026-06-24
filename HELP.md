@@ -16,6 +16,31 @@ The tool is intentionally exploratory. It can help identify candidate periods, a
 8. Use prewhitening to remove selected periodicities and search for residual signals.
 9. Use Period Tomography to inspect whether the periodicity changes with time.
 10. Use Model Laboratory for more specific phenomenological or educational fits.
+11. Save evidence notes and generate a PDF report with the selected analysis sections.
+
+## Minimum Student Workflow
+
+This is the minimum recommended workflow for a student report. It is intended to encourage a progressive analysis: first inspect the data with as few assumptions as possible, then refine the search, estimate uncertainties, and finally compare the result with the literature.
+
+1. **Load the light curve without error weighting.**
+   Upload the ASCII or FITS light curve, select the time and flux/count-rate/magnitude columns, and disable the error column for the first pass. This gives an initial unweighted view of the data and avoids over-interpreting uncertain or problematic error estimates before inspecting the light curve.
+
+2. **Make a first inspection of possible periodicities.**
+   Run the frequency search with the suggested or default frequency range. Inspect the Lomb-Scargle periodogram, the sampling window, and the automatically detected candidate periods. At this stage the goal is not to choose a final solution, but to identify which peaks deserve closer attention and which may be related to the observing cadence.
+
+3. **Refine the frequency range and enable uncertainty estimates.**
+   Adjust the minimum and maximum frequencies to cover the scientifically relevant period range. Then enable the error column, if a reliable uncertainty column is available, and run the uncertainty calculation. The student should report the candidate period, its uncertainty, the corresponding frequency, the false-alarm probability, and whether the peak is likely intrinsic or related to the sampling window.
+
+4. **Investigate the folded profile.**
+   Fold the light curve using the most relevant candidate period and inspect the profile over two cycles. Try different bin numbers when useful. Check whether the folded profile is coherent and whether the phase of maxima or minima is physically meaningful.
+
+5. **Test whether harmonics improve the folded fit.**
+   Compare a simple sinusoidal fit with fits that include harmonics or additional selected periods. The student should comment on whether the extra terms genuinely improve the profile or merely add unnecessary flexibility.
+
+6. **Fill in the evidence boxes with literature context.**
+   Use the **Save evidences** sections to record the adopted period, uncertainty, additional tested periods, and a short comparison with published values or expectations from the literature. A good report should explain whether the result agrees with previous work, disagrees with it, or remains ambiguous because of aliases, sampling artefacts, weak signal-to-noise, or limited time coverage.
+
+The minimum final report should therefore include the original light curve, the Lomb-Scargle periodogram, the sampling-window interpretation, the folded profile, the adopted period and uncertainty, and a short literature-based discussion.
 
 ## Input
 
@@ -724,6 +749,58 @@ Least-squares method used for the pulse-profile Fourier model.
 
 **Show full data set with model**
 Displays the pulse model over the full data set.
+
+## Data Downloads, Evidence, and PDF Reports
+
+Several result blocks include download buttons for the plotted data. These export plain text tables with the numerical values used in the displayed figures, so the same periodograms, sampling-window curves, folded profiles, model curves, epoch-folding searches, or pulse-arrival diagnostics can be inspected outside the app.
+
+### Save Evidences
+
+The **Save evidences** expanders are intended for student reports. They keep short notes linked to the current analysis state and can be included in the generated PDF report.
+
+The frequency-search evidence block records the adopted period, its uncertainty, optional extra periods, and comments comparing the detected period or periods with the literature.
+
+The prewhitening evidence block records the periods used in the prewhitening chain and comments on whether those removals are justified.
+
+The Period Tomography evidence block records the window width, window step, and comments on whether the tomogram supports a stable, drifting, intermittent, or ambiguous signal.
+
+The Model Laboratory evidence block records comments on the selected model and comparison with published interpretations or expected physical behavior.
+
+Closing an evidence expander does not erase its contents. The notes are cleared only when the workspace is reset.
+
+### PDF Report Builder
+
+The report panel creates a compact PDF report from the current workspace. It can include:
+
+- the input data overview and original light curve,
+- the Lomb-Scargle and folded-profile plots,
+- the folded-fit equation and detected-period table,
+- frequency-search evidence entered by the student,
+- iterative-prewhitening plots, tables, and evidence,
+- the Period Tomography map and evidence,
+- Model Laboratory plots, formulae, summary text, pedagogical hints, and evidence.
+
+The report metadata fields are:
+
+**Object name**
+Name of the astronomical source or target being analyzed.
+
+**Student name**
+Name of the student or group preparing the report.
+
+**Course**
+Course, lab session, or activity name.
+
+**Output PDF file name**
+Name of the generated PDF file.
+
+**Previous PDF report**
+Optional PDF file. If supplied, the newly generated report is appended after the pages of the uploaded PDF. This is useful when a student wants to build a multi-part report over several analysis sessions.
+
+**Sections to include**
+Checkboxes controlling whether the report includes Frequency Search, Iterative Prewhitening, Period Tomography, and Model Laboratory sections. Empty or unavailable sections are skipped.
+
+The PDF report is a teaching/reporting aid. It preserves the main plots, fitted formulae, tables, and evidence text, but it should still be checked by the student before submission.
 
 ## Interpreting Results Safely
 
