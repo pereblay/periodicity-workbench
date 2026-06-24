@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
-__version__ = "1.2.0"
+__version__ = "1.4.0"
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".matplotlib"))
 
 import matplotlib
@@ -3017,10 +3017,14 @@ def sliding_lomb_scargle(result: dict, fields: dict[str, str]) -> dict:
                 values[idx] = float(np.hypot(params[-2], params[-1]))
         else:
             values = ls.power(frequency)
+        values = np.asarray(values, dtype=float)
+        values[~np.isfinite(values)] = np.nan
+        if np.all(np.isnan(values)):
+            continue
         rows.append(values)
         valid_centers.append(float(center))
         counts.append(n_local)
-        if track_mask is not None:
+        if track_mask is not None and np.any(np.isfinite(values[track_mask])):
             masked_values = np.where(track_mask, values, np.nan)
             best_idx = int(np.nanargmax(masked_values))
         else:
@@ -3116,6 +3120,7 @@ def wwz_map(result: dict, fields: dict[str, str]) -> dict:
                 values[idx] = max(neff - 3.0, 0.0) * model_var / (2.0 * resid_var)
         if np.all(np.isnan(values)):
             continue
+        values[~np.isfinite(values)] = np.nan
         rows.append(values)
         valid_centers.append(float(center))
         counts.append(float(np.nanmax(effective_counts)))
