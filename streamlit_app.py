@@ -3513,9 +3513,11 @@ def layout_one() -> None:
             input_controls(prefix, st)
         with st.expander("Frequency Search", expanded=True):
             search_controls(prefix, st)
-        with st.expander("Uncertainties", expanded=False):
+            st.divider()
+            st.markdown("**Uncertainties**")
             uncertainty_controls(prefix, st)
-        with st.expander("Manual Exclusions", expanded=False):
+            st.divider()
+            st.markdown("**Manual Exclusions**")
             manual_exclusion_controls(prefix, st)
         with st.expander("Folded Profile", expanded=False):
             folded_controls(prefix, st)

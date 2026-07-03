@@ -154,7 +154,7 @@ Small FAP values suggest a more significant periodicity. However, FAP values sho
 
 ## Uncertainties
 
-The uncertainty block estimates period and frequency errors using bootstrap resampling.
+The **Uncertainties** subsection inside **Frequency Search** estimates period and frequency errors using bootstrap resampling.
 
 The basic idea is:
 
@@ -176,7 +176,7 @@ Fractional search width around each candidate frequency. For example, a width of
 
 ## Manual Exclusions
 
-Manual exclusions allow the user to prevent selected periods from being used as the primary period. This is useful when a peak is clearly due to sampling, aliasing, instrumental effects, or a known contaminating signal.
+The **Manual Exclusions** subsection inside **Frequency Search** allows the user to prevent selected periods from being used as the primary period. This is useful when a peak is clearly due to sampling, aliasing, instrumental effects, or a known contaminating signal.
 
 ### Parameters
 
