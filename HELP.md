@@ -76,6 +76,18 @@ where `sigma_i` is the error value. When disabled, all points are assigned equal
 **Flux is magnitude**
 When enabled, plots using the flux axis are displayed with an inverted vertical axis, as is customary for magnitudes.
 
+**Object name / Resolve SIMBAD**
+Object name used to resolve sky coordinates through the SIMBAD/Sesame name resolver. The resolved ICRS coordinates are written into the RA and Dec fields and can be edited manually.
+
+**RA / Dec**
+Target coordinates in decimal degrees. They are recorded in the input summary and report metadata, but the app does not modify the uploaded time column from these coordinates.
+
+**Time corrections**
+The app does not apply heliocentric or barycentric time corrections. A correct light-time correction requires the target coordinates and the observer location, or the spacecraft ephemeris for space missions. Because uploaded light curves often do not include that information, Periodicity Workbench leaves the time column unchanged.
+
+**Bibliographic Search**
+After the object has been resolved with SIMBAD/Sesame, the Bibliographic Search button below the coordinates opens a temporary workspace view, similar to this help page, without clearing the current analysis state. It uses the resolved object name, prepares astronomy-literature searches for time-series, period, periodicity, timing, and variability terms, and displays an automatic arXiv result list when network access is available. The panel also provides a direct ADS query link, which should be used for the most complete astronomy bibliography.
+
 **xmin, xmax, ymin, ymax**
 Optional limits applied before the analysis. These restrict the time and flux ranges used by the calculations.
 

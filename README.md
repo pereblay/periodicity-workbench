@@ -10,6 +10,8 @@ It supports:
 - Uploading FITS-like tables detected by file content, including common `.fits`, `.fit`, `.fts`, `.ftz`, `.lc`, and `.fits.gz` files.
 - Choosing the time, flux/count-rate/magnitude, and optional error columns.
 - Previewing the selected table rows and original light curve before running the analysis.
+- Resolving and recording target coordinates with SIMBAD/Sesame.
+- Bibliographic lookups for the target object with time-series and periodicity search terms.
 - Weighted Lomb-Scargle periodograms.
 - Sampling-window inspection and tentative artefact classification.
 - Local residual bootstrap errors for detected peaks.

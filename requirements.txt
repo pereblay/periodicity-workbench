@@ -6,3 +6,4 @@ streamlit
 pandas
 plotly
 pypdf
+certifi

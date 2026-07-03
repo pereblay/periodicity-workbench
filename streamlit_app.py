@@ -3,7 +3,11 @@ from __future__ import annotations
 import hashlib
 import io
 from pathlib import Path
+import ssl
 import textwrap
+from urllib.parse import quote, urlencode
+from urllib.request import urlopen
+import xml.etree.ElementTree as ET
 
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
@@ -12,6 +16,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+from astropy.coordinates import SkyCoord
 
 try:
     from pypdf import PdfReader, PdfWriter
@@ -150,6 +155,7 @@ STATE_KEYS = [
     "app_model_lab_result",
     "app_show_model",
     "app_show_help",
+    "app_show_bibliography",
     "app_report_previous_pdf",
 ]
 
@@ -173,6 +179,136 @@ def render_help_document() -> None:
         st.error("Help documentation is not available in this deployment.")
     st.divider()
     return_from_help_button("app_help_back_bottom")
+
+
+def return_from_bibliography_button(key: str) -> None:
+    if st.button("Back to analysis", use_container_width=True, key=key):
+        st.session_state["app_show_bibliography"] = False
+        st.rerun()
+
+
+def current_object_name(prefix: str = "l1") -> str:
+    fields = st.session_state.get("app_fields", {})
+    candidates = [
+        st.session_state.get(f"{prefix}_target_name", ""),
+        fields.get("target_name", "") if isinstance(fields, dict) else "",
+        st.session_state.get("report_object_name", ""),
+    ]
+    for value in candidates:
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def bibliography_search_urls(object_name: str) -> dict[str, str]:
+    keywords = '"time series" OR period OR periods OR periodicity OR timing OR variability'
+    ads_query = f'"{object_name}" AND ({keywords})'
+    arxiv_query = f'all:"{object_name}" AND (all:"time series" OR all:period OR all:periodicity OR all:timing OR all:variability)'
+    return {
+        "ADS": "https://ui.adsabs.harvard.edu/search/q=" + quote(ads_query),
+        "arXiv": "https://arxiv.org/search/astro-ph?query=" + quote(object_name) + "&searchtype=all",
+        "arXiv API": "https://export.arxiv.org/api/query?" + urlencode({
+            "search_query": arxiv_query,
+            "start": 0,
+            "max_results": 20,
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+        }),
+    }
+
+
+def trusted_ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi
+    except Exception:
+        return ssl.create_default_context()
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def arxiv_bibliography_search(object_name: str) -> list[dict[str, str]]:
+    urls = bibliography_search_urls(object_name)
+    with urlopen(urls["arXiv API"], timeout=12, context=trusted_ssl_context()) as response:
+        raw = response.read()
+    root = ET.fromstring(raw)
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    rows: list[dict[str, str]] = []
+    for entry in root.findall("atom:entry", ns):
+        title = " ".join((entry.findtext("atom:title", default="", namespaces=ns) or "").split())
+        summary = " ".join((entry.findtext("atom:summary", default="", namespaces=ns) or "").split())
+        published = (entry.findtext("atom:published", default="", namespaces=ns) or "")[:10]
+        link = ""
+        for link_node in entry.findall("atom:link", ns):
+            if link_node.attrib.get("rel") == "alternate":
+                link = link_node.attrib.get("href", "")
+                break
+        authors = []
+        for author in entry.findall("atom:author", ns):
+            name = author.findtext("atom:name", default="", namespaces=ns)
+            if name:
+                authors.append(name)
+        keyword_hits = [
+            word for word in ["time series", "period", "periodicity", "timing", "variability", "Lomb", "folding"]
+            if word.lower() in f"{title} {summary}".lower()
+        ]
+        rows.append({
+            "published": published,
+            "title": title,
+            "authors": ", ".join(authors[:4]) + (" et al." if len(authors) > 4 else ""),
+            "matched_terms": ", ".join(keyword_hits) if keyword_hits else "object match",
+            "url": link,
+            "summary": summary,
+        })
+    return rows
+
+
+def render_bibliography_search(prefix: str = "l1") -> None:
+    st.divider()
+    return_from_bibliography_button("app_biblio_back_top")
+    st.divider()
+    object_name = current_object_name(prefix)
+    st.subheader("Bibliographic Search")
+    if not object_name:
+        st.info("Enter an object name in the Input panel, or in the report metadata, before running the bibliographic search.")
+        st.divider()
+        return_from_bibliography_button("app_biblio_back_bottom")
+        return
+
+    urls = bibliography_search_urls(object_name)
+    st.caption(f"Object searched: {object_name}")
+    st.markdown(
+        f"[Open ADS search]({urls['ADS']}) | [Open arXiv search]({urls['arXiv']})"
+    )
+    st.caption("The automatic list below uses arXiv results filtered with time-series and periodicity terms. ADS is linked for a fuller astronomy literature search.")
+    try:
+        rows = arxiv_bibliography_search(object_name)
+    except Exception as exc:
+        st.warning(f"Automatic arXiv search is not available right now: {exc}")
+        rows = []
+    if not rows:
+        st.info("No automatic arXiv matches were returned. Use the ADS/arXiv links above to continue the literature search.")
+    else:
+        table = pd.DataFrame([
+            {
+                "Date": row["published"],
+                "Title": row["title"],
+                "Authors": row["authors"],
+                "Matched terms": row["matched_terms"],
+                "URL": row["url"],
+            }
+            for row in rows
+        ])
+        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.markdown("**Abstract snippets**")
+        for index, row in enumerate(rows[:10], start=1):
+            with st.expander(f"{index}. {row['title']}", expanded=False):
+                st.caption(f"{row['published']} | {row['authors']} | {row['matched_terms']}")
+                st.write(row["summary"])
+                if row["url"]:
+                    st.markdown(f"[Open record]({row['url']})")
+    st.divider()
+    return_from_bibliography_button("app_biblio_back_bottom")
 
 
 def file_signature(uploaded_file) -> tuple[str, int, str]:
@@ -224,6 +360,14 @@ def axis_labels(time_unit: str) -> dict[str, str]:
     if (time_unit or "days").lower().startswith("sec"):
         return {"time": "Time [s]", "period": "Period [s]", "frequency": "Frequency [Hz]", "baseline": "s"}
     return {"time": "Time [d]", "period": "Period [d]", "frequency": "Frequency [cycles/day]", "baseline": "d"}
+
+
+def resolve_target_name(name: str) -> tuple[float, float, str]:
+    target = name.strip()
+    if not target:
+        raise ValueError("Enter an object name before resolving coordinates.")
+    coord = SkyCoord.from_name(target).icrs
+    return float(coord.ra.deg), float(coord.dec.deg), coord.to_string("hmsdms", precision=2)
 
 
 def optional_state_float(prefix: str, name: str) -> float | None:
@@ -1246,8 +1390,9 @@ def input_summary_frame(result: dict) -> pd.DataFrame:
         file_type = "ASCII table"
     else:
         file_type = "Unknown"
+    object_name = report_metadata().get("object") or fields.get("target_name") or "Not provided"
     rows = [
-        ("Object", report_metadata().get("object") or "Not provided"),
+        ("Object", object_name),
         ("File", filename),
         ("File type", file_type),
         ("Rows used", result.get("n_points", len(time))),
@@ -1256,6 +1401,10 @@ def input_summary_frame(result: dict) -> pd.DataFrame:
         ("Flux range", "Not available" if len(flux) == 0 else f"{float(np.nanmin(flux)):.6g} - {float(np.nanmax(flux)):.6g}"),
         ("Error column", "yes" if result.get("has_error_column", True) else "no"),
     ]
+    target_ra = str(fields.get("target_ra_deg", "")).strip()
+    target_dec = str(fields.get("target_dec_deg", "")).strip()
+    if target_ra and target_dec:
+        rows.append(("Target coordinates", f"RA={target_ra} deg, Dec={target_dec} deg"))
     if file_type == "FITS table":
         rows.extend([
             ("FITS extension", fields.get("fits_extension", "Not recorded")),
@@ -2096,6 +2245,9 @@ def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dic
         "error_col": str(st.session_state.get(f"{prefix}_error_col", 3)) if st.session_state.get(f"{prefix}_use_error", True) else "",
         "flux_is_magnitude": "true" if st.session_state.get(f"{prefix}_flux_is_magnitude", False) else "false",
         "time_unit": st.session_state.get(f"{prefix}_time_unit", "days"),
+        "target_name": str(st.session_state.get(f"{prefix}_target_name", "")).strip(),
+        "target_ra_deg": str(st.session_state.get(f"{prefix}_target_ra_deg", "")).strip(),
+        "target_dec_deg": str(st.session_state.get(f"{prefix}_target_dec_deg", "")).strip(),
         "xmin": str(st.session_state.get(f"{prefix}_xmin", "")).strip(),
         "xmax": str(st.session_state.get(f"{prefix}_xmax", "")).strip(),
         "ymin": str(st.session_state.get(f"{prefix}_ymin", "")).strip(),
@@ -2166,6 +2318,7 @@ def run_analysis_action(prefix: str, location=st) -> None:
             st.session_state.pop("app_model_lab_result", None)
             st.session_state["app_show_model"] = False
             st.session_state["app_show_help"] = False
+            st.session_state["app_show_bibliography"] = False
         except ValueError as exc:
             location.error(str(exc))
         else:
@@ -2215,6 +2368,46 @@ def input_controls(prefix: str, location=st) -> None:
     )
     option_cols[1].checkbox("Use error column", value=st.session_state.get(f"{prefix}_use_error", True), key=f"{prefix}_use_error")
     option_cols[2].checkbox("Flux is magnitude", value=st.session_state.get(f"{prefix}_flux_is_magnitude", False), key=f"{prefix}_flux_is_magnitude")
+    location.caption("Target identification")
+    target_cols = location.columns([0.62, 0.38])
+    target_name = target_cols[0].text_input("Object name", key=f"{prefix}_target_name", placeholder="e.g. 4U 2206+54")
+    target_cols[1].markdown("<div style='height: 1.78rem'></div>", unsafe_allow_html=True)
+    if target_cols[1].button("SIMBAD search", use_container_width=True, key=f"{prefix}_resolve_target"):
+        try:
+            ra_deg, dec_deg, resolved = resolve_target_name(str(st.session_state.get(f"{prefix}_target_name", "")))
+        except Exception as exc:
+            st.session_state[f"{prefix}_target_resolved"] = False
+            st.session_state[f"{prefix}_target_resolved_name"] = ""
+            location.error(f"Could not resolve target name: {exc}")
+        else:
+            st.session_state[f"{prefix}_target_ra_deg"] = f"{ra_deg:.10f}"
+            st.session_state[f"{prefix}_target_dec_deg"] = f"{dec_deg:.10f}"
+            st.session_state[f"{prefix}_target_resolved"] = True
+            st.session_state[f"{prefix}_target_resolved_name"] = str(st.session_state.get(f"{prefix}_target_name", "")).strip()
+            if not st.session_state.get("report_object_name"):
+                st.session_state["report_object_name"] = st.session_state.get(f"{prefix}_target_name", "")
+            location.success(f"Resolved coordinates: {resolved}")
+    coord_cols = location.columns(2)
+    coord_cols[0].text_input("RA [deg]", key=f"{prefix}_target_ra_deg", placeholder="auto/manual")
+    coord_cols[1].text_input("Dec [deg]", key=f"{prefix}_target_dec_deg", placeholder="auto/manual")
+    resolved_name = str(st.session_state.get(f"{prefix}_target_resolved_name", "")).strip()
+    target_ready = (
+        bool(st.session_state.get(f"{prefix}_target_resolved", False))
+        and str(target_name).strip()
+        and str(target_name).strip() == resolved_name
+        and str(st.session_state.get(f"{prefix}_target_ra_deg", "")).strip()
+        and str(st.session_state.get(f"{prefix}_target_dec_deg", "")).strip()
+    )
+    if location.button(
+        "Bibliographic Search",
+        use_container_width=True,
+        key=f"{prefix}_show_bibliography_input",
+        disabled=not target_ready,
+        help="Resolve the object with SIMBAD before searching bibliography." if not target_ready else "Search literature mentioning time series, periods, periodicity, timing, or variability.",
+    ):
+        st.session_state["app_show_bibliography"] = True
+        st.session_state["app_show_help"] = False
+        st.rerun()
     location.caption("Analysis limits")
     limit_cols = location.columns(4)
     limit_cols[0].text_input("xmin", value=st.session_state.get(f"{prefix}_xmin", ""), key=f"{prefix}_xmin", placeholder="auto")
@@ -3522,10 +3715,14 @@ def layout_one() -> None:
             report_controls(prefix, st)
         if st.button("Help", use_container_width=True, key=f"{prefix}_show_help"):
             st.session_state["app_show_help"] = True
+            st.session_state["app_show_bibliography"] = False
             st.rerun()
     result = st.session_state.get("app_result")
     if st.session_state.get("app_show_help", False):
         render_help_document()
+        return
+    if st.session_state.get("app_show_bibliography", False):
+        render_bibliography_search(prefix)
         return
     render_file_preview(prefix)
     render_search_outputs(result)
