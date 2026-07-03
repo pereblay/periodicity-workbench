@@ -37,18 +37,9 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    :root {
-        --periodicity-sidebar-width: 28.5rem;
-    }
     [data-testid="stSidebar"] {
-        width: var(--periodicity-sidebar-width) !important;
-        min-width: var(--periodicity-sidebar-width) !important;
-        max-width: var(--periodicity-sidebar-width) !important;
         height: 100vh !important;
         overflow: hidden !important;
-    }
-    [data-testid="stSidebar"] > div:first-child {
-        width: var(--periodicity-sidebar-width) !important;
     }
     [data-testid="stSidebar"] > div:first-child,
     [data-testid="stSidebarContent"] {
