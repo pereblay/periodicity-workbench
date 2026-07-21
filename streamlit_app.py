@@ -657,6 +657,21 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df.replace({np.nan: None})
 
 
+def parallel_series_dataframe(columns: dict[str, object]) -> pd.DataFrame:
+    """Build a table from parallel arrays, omitting unavailable optional series."""
+    if not columns:
+        return pd.DataFrame()
+    first_name, first_values = next(iter(columns.items()))
+    reference = [] if first_values is None else first_values
+    target_length = len(reference)
+    aligned = {first_name: reference}
+    for name, values in list(columns.items())[1:]:
+        series = [] if values is None else values
+        if len(series) == target_length:
+            aligned[name] = series
+    return pd.DataFrame(aligned)
+
+
 def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
     return clean_dataframe(pd.DataFrame([
         {
@@ -671,6 +686,43 @@ def peaks_dataframe(peaks: list[dict]) -> pd.DataFrame:
             "window_period": peak["window_period"],
         }
         for peak in peaks
+    ]))
+
+
+def harmonic_diagnostics_dataframe(rows: list[dict]) -> pd.DataFrame:
+    return clean_dataframe(pd.DataFrame([
+        {
+            "relation": row.get("relation"),
+            "family": row.get("family"),
+            "target_period": row.get("target_period"),
+            "nearest_period": row.get("nearest_period"),
+            "delta_%": row.get("period_delta_percent"),
+            "power": row.get("power"),
+            "FAP": None if row.get("fap") is None else f"{float(row['fap']):.5f}",
+            "window_power": row.get("window_power"),
+            "detected": row.get("detected"),
+            "note": row.get("note"),
+        }
+        for row in rows
+    ]))
+
+
+def prewhitening_summary_dataframe(summary: dict) -> pd.DataFrame:
+    if not summary:
+        return pd.DataFrame()
+    return clean_dataframe(pd.DataFrame([
+        {
+            "terms": summary.get("n_terms"),
+            "parameters": summary.get("n_parameters"),
+            "RMS before": summary.get("rms_before"),
+            "RMS after": summary.get("rms_after"),
+            "RMS reduction [%]": summary.get("rms_reduction_percent"),
+            "LS peak before": summary.get("max_power_before"),
+            "LS peak after": summary.get("max_power_after"),
+            "LS peak reduction [%]": summary.get("max_power_reduction_percent"),
+            "AIC": summary.get("AIC"),
+            "BIC": summary.get("BIC"),
+        }
     ]))
 
 
@@ -1503,6 +1555,11 @@ def model_lab_pedagogical_hint(model_result: dict) -> str:
             "Depth and width ratios trace relative brightness/radius geometry, while separation away from "
             "0.5 can suggest eccentric geometry or phase-reference effects."
         )
+    if family == "binary_assistant":
+        return (
+            "This assistant is morphological: it highlights minima, phase separation, depth ratio, and possible "
+            "half-period ambiguity, but does not derive a unique mass, radius, or inclination solution."
+        )
     if family == "bondi_hoyle":
         return (
             "This toy model tests whether denser or slower wind near periastron can explain the modulation. "
@@ -1600,6 +1657,18 @@ def model_lab_report_summary(model_result: dict, app_result: dict) -> str:
             lines.append(f"BIC: {fmt_value(summary.get('BIC'))}")
         if summary.get("rms") is not None:
             lines.append(f"RMS: {fmt_value(summary.get('rms'))}")
+    elif family == "binary_assistant":
+        lines.extend([
+            "Model family: binary interpretation assistant",
+            f"Folded period: {fmt_value(model_result.get('period'), 6)} {period_unit}",
+            f"T0 / reference epoch: {fmt_value(model_result.get('t0'), 6)} {time_unit}",
+            f"Morphology: {summary.get('morphology', 'not available')}",
+            f"Minimum separation: {fmt_value(summary.get('minimum_phase_separation'))}",
+            f"Separation from 0.5: {fmt_value(summary.get('separation_from_0p5'))}",
+            f"Depth ratio: {fmt_value(summary.get('depth_ratio'))}",
+            f"Possible half-period ambiguity: {summary.get('half_period_warning', False)}",
+            f"Pedagogical hint: {model_lab_pedagogical_hint(model_result)}",
+        ])
     elif family == "bondi_hoyle":
         maxima = model_result.get("extrema", [])
         lines.extend([
@@ -2041,6 +2110,129 @@ def model_lab_binary_plot(model_result: dict, app_result: dict) -> go.Figure:
         xaxis_title="Orbital phase",
         yaxis_title=f"Weighted mean {flux_axis_title(app_result).lower()}",
         height=480,
+        margin=dict(l=20, r=20, t=50, b=25),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+    )
+    fig.update_xaxes(range=[0, 2])
+    apply_flux_axis(fig, app_result)
+    return frame(fig)
+
+
+def circular_phase_distance(a: float, b: float) -> float:
+    delta = abs((a - b) % 1.0)
+    return min(delta, 1.0 - delta)
+
+
+def binary_interpretation_assistant(result: dict) -> dict:
+    phase = np.asarray(result.get("series", {}).get("fold_phase", []), dtype=float)
+    flux = np.asarray(result.get("series", {}).get("fold_flux", []), dtype=float)
+    error = np.asarray(result.get("series", {}).get("fold_error", []), dtype=float)
+    valid = np.isfinite(phase) & np.isfinite(flux)
+    phase = phase[valid]
+    flux = flux[valid]
+    error = error[valid] if len(error) == len(valid) else np.asarray([], dtype=float)
+    if len(phase) < 4:
+        raise ValueError("The binary assistant needs at least four folded bins.")
+    order = np.argsort(phase)
+    phase = phase[order]
+    flux = flux[order]
+    error = error[order] if len(error) == len(order) else error
+    brightness = -flux if flux_is_magnitude(result) else flux
+    baseline = float(np.nanpercentile(brightness, 90))
+    primary_idx = int(np.nanargmin(brightness))
+    separated = np.asarray([circular_phase_distance(float(ph), float(phase[primary_idx])) >= 0.20 for ph in phase], dtype=bool)
+    if np.any(separated):
+        separated_indices = np.flatnonzero(separated)
+        secondary_idx = int(separated_indices[int(np.nanargmin(brightness[separated]))])
+    else:
+        secondary_idx = int(np.nanargmin(np.where(np.arange(len(phase)) == primary_idx, np.inf, brightness)))
+    primary_phase = float(phase[primary_idx])
+    secondary_phase = float(phase[secondary_idx])
+    separation = circular_phase_distance(secondary_phase, primary_phase)
+    primary_depth = max(0.0, baseline - float(brightness[primary_idx]))
+    secondary_depth = max(0.0, baseline - float(brightness[secondary_idx]))
+    depth_ratio = None if primary_depth <= 0.0 else float(secondary_depth / primary_depth)
+    asymmetry = abs(separation - 0.5)
+    harmonic_rows = result.get("harmonic_diagnostics", [])
+    half_period_warning = any(row.get("relation") == "2P" and row.get("detected") for row in harmonic_rows)
+    if depth_ratio is not None and depth_ratio > 0.75 and asymmetry < 0.08:
+        morphology = "W UMa / contact-like candidate"
+    elif depth_ratio is not None and depth_ratio < 0.45:
+        morphology = "Algol-like detached candidate"
+    else:
+        morphology = "Beta Lyrae / ellipsoidal or mixed candidate"
+    if asymmetry >= 0.05:
+        eccentricity_note = "secondary minimum is not exactly 0.5 in phase from the primary; eccentricity, apsidal orientation, or an imperfect T0 may matter"
+    else:
+        eccentricity_note = "minimum separation is close to 0.5; a circular or well-phased solution is plausible"
+    rows = [
+        {"quantity": "primary minimum phase", "value": primary_phase, "interpretation": "deeper/lowest-brightness minimum"},
+        {"quantity": "secondary minimum phase", "value": secondary_phase, "interpretation": "next separated minimum"},
+        {"quantity": "minimum separation", "value": separation, "interpretation": eccentricity_note},
+        {"quantity": "primary depth proxy", "value": primary_depth, "interpretation": "relative to upper folded-profile envelope"},
+        {"quantity": "secondary depth proxy", "value": secondary_depth, "interpretation": "relative to upper folded-profile envelope"},
+        {"quantity": "secondary / primary depth", "value": depth_ratio, "interpretation": "similar depths favor contact-like systems; very different depths favor Algol-like systems"},
+        {"quantity": "possible half-period ambiguity", "value": bool(half_period_warning), "interpretation": "try folding at 2P if LS selected nearly equal minima as one cycle"},
+    ]
+    summary = {
+        "morphology": morphology,
+        "minimum_phase_separation": separation,
+        "separation_from_0p5": asymmetry,
+        "depth_ratio": depth_ratio,
+        "half_period_warning": bool(half_period_warning),
+        "rms": None,
+    }
+    hints = [
+        "Fold at 2P if the LS peak may represent two similar eclipses per orbit.",
+        "If the secondary minimum is not separated by 0.5 in phase, inspect eccentricity or the chosen T0.",
+        "Depth ratios alone are not unique mass or radius estimates; inclination, third light, temperatures, and radii are degenerate.",
+    ]
+    phase_2 = np.concatenate([phase, phase + 1.0])
+    flux_2 = np.concatenate([flux, flux])
+    return {
+        "family": "binary_assistant",
+        "period": result.get("folded_period") or result.get("primary_period"),
+        "t0": result.get("t0"),
+        "phase": phase.tolist(),
+        "flux": flux.tolist(),
+        "error": error.tolist(),
+        "model_phase": phase_2.tolist(),
+        "model_flux": flux_2.tolist(),
+        "summary": summary,
+        "parameters": rows,
+        "hints": hints,
+        "formula": "Morphological diagnostics from folded minima: phase separation, depth ratio, and harmonic/2P ambiguity checks.",
+    }
+
+
+def model_lab_binary_assistant_plot(model_result: dict, app_result: dict) -> go.Figure:
+    phase = np.asarray(model_result.get("phase", []), dtype=float)
+    flux = np.asarray(model_result.get("flux", []), dtype=float)
+    error = np.asarray(model_result.get("error", []), dtype=float)
+    phase_2 = np.concatenate([phase, phase + 1.0]) if len(phase) else phase
+    flux_2 = np.concatenate([flux, flux]) if len(flux) else flux
+    error_2 = np.concatenate([error, error]) if len(error) else error
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=phase_2,
+        y=flux_2,
+        error_y=dict(type="data", array=error_2, visible=bool(app_result.get("has_error_column", True))),
+        mode="markers",
+        marker=dict(color="#20242a", size=8),
+        name="Folded data",
+        hovertemplate="Phase=%{x:.5f}<br>Value=%{y:.6g}<extra></extra>",
+    ))
+    for row in model_result.get("parameters", []):
+        if row.get("quantity") not in {"primary minimum phase", "secondary minimum phase"}:
+            continue
+        color = "#b13b32" if row["quantity"].startswith("primary") else "#2457a6"
+        for offset in [0.0, 1.0]:
+            fig.add_vline(x=float(row["value"]) + offset, line_dash="dash", line_color=color, opacity=0.72)
+    fig.update_layout(
+        title="Binary interpretation assistant",
+        xaxis_title="Orbital phase",
+        yaxis_title=f"Weighted mean {flux_axis_title(app_result).lower()}",
+        height=440,
         margin=dict(l=20, r=20, t=50, b=25),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
     )
@@ -2764,6 +2956,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
         "Model family",
         [
             "Fourier multi-harmonic",
+            "Binary interpretation assistant",
             "Eclipsing / eccentric binaries",
             "Bondi-Hoyle accretion",
             "X-ray pulsation timing",
@@ -2775,6 +2968,17 @@ def model_lab_controls(prefix: str, location=st) -> None:
         return
     period_unit = result.get("period_unit", axis_labels(st.session_state.get(f"{prefix}_time_unit", "days"))["baseline"])
     default_period = result.get("folded_period") or result.get("primary_period") or ""
+    if family == "Binary interpretation assistant":
+        location.caption("Compact folded-profile diagnostics for eclipsing-binary morphology, half-period ambiguity, and minimum spacing.")
+        if location.button("Run binary assistant", use_container_width=True, key=f"{prefix}_run_binary_assistant"):
+            try:
+                st.session_state["app_model_lab_result"] = binary_interpretation_assistant(result)
+            except ValueError as exc:
+                location.error(str(exc))
+                return
+            st.rerun()
+        return
+
     if family == "X-ray pulsation timing":
         if f"{prefix}_model_lab_pulse_period" not in st.session_state and default_period != "":
             st.session_state[f"{prefix}_model_lab_pulse_period"] = f"{float(default_period):.12g}"
@@ -3271,6 +3475,11 @@ def render_search_outputs(result: dict | None) -> None:
             st.dataframe(folded_periods_and_parameters(result), use_container_width=True, hide_index=True)
     st.subheader("Detected peaks")
     st.dataframe(peaks_dataframe(result.get("peaks", [])), use_container_width=True, hide_index=True)
+    harmonic_rows = result.get("harmonic_diagnostics", [])
+    if harmonic_rows:
+        with st.expander("Harmonic diagnostics", expanded=False):
+            st.caption("Checks the fundamental, harmonics, and longer multiples of the selected primary period. The 2P row is useful for eclipsing-binary half-period ambiguity.")
+            st.dataframe(harmonic_diagnostics_dataframe(harmonic_rows), use_container_width=True, hide_index=True)
     dl_cols = st.columns(3)
     with dl_cols[0]:
         dataframe_download("Download LS data", pd.DataFrame({"period": result["series"]["period"], "frequency": result["series"]["frequency"], "power": result["series"]["power"]}), "lomb_scargle_periodogram.txt", "app_download_ls")
@@ -3310,6 +3519,13 @@ def render_secondary_outputs(result: dict | None) -> None:
     if result.get("has_prewhitening"):
         st.divider()
         st.subheader("Iterative prewhitening")
+        summary = result.get("prewhitening_summary", {})
+        if summary:
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("RMS reduction", f"{float(summary.get('rms_reduction_percent', 0.0)):.3g}%")
+            metric_cols[1].metric("LS peak reduction", f"{float(summary.get('max_power_reduction_percent', 0.0)):.3g}%")
+            metric_cols[2].metric("AIC", f"{float(summary.get('AIC', 0.0)):.5g}")
+            metric_cols[3].metric("BIC", f"{float(summary.get('BIC', 0.0)):.5g}")
         cols = st.columns([1.2, 1.0])
         cols[0].plotly_chart(periodogram(result, "residual_power", "residual_peaks", "After prewhitening"), use_container_width=True)
         with cols[1]:
@@ -3320,6 +3536,8 @@ def render_secondary_outputs(result: dict | None) -> None:
                 st.code(fit_equation_text(result.get("prewhitening_terms", []), variable="t_shifted"), language="text")
                 st.caption("Global prewhitening fit summary")
                 st.dataframe(global_fit_summary(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
+                with st.expander("Prewhitening quality diagnostics", expanded=False):
+                    st.dataframe(prewhitening_summary_dataframe(result.get("prewhitening_summary", {})), use_container_width=True, hide_index=True)
             st.caption("Remaining LS peaks after prewhitening")
             st.dataframe(peaks_dataframe(result.get("residual_peaks", [])), use_container_width=True, hide_index=True)
         render_prewhitening_evidence()
@@ -3568,6 +3786,23 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Model extrema / eclipse phases")
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
         prefix_name = "binary"
+    elif model_result.get("family") == "binary_assistant":
+        st.plotly_chart(model_lab_binary_assistant_plot(model_result, result), use_container_width=True)
+        summary = model_result.get("summary", {})
+        info_cols = st.columns(4)
+        period_value = model_result.get("period")
+        period_label = "" if period_value is None else f"{float(period_value):.6g} {result.get('period_unit', '')}"
+        info_cols[0].metric("Folded period", period_label)
+        info_cols[1].metric("Morphology", str(summary.get("morphology", "not available")))
+        info_cols[2].metric("Min. separation", f"{float(summary.get('minimum_phase_separation', 0.0)):.4g}")
+        ratio = summary.get("depth_ratio")
+        info_cols[3].metric("Depth ratio", "" if ratio is None else f"{float(ratio):.4g}")
+        st.caption("Binary interpretation diagnostics")
+        st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), use_container_width=True, hide_index=True)
+        st.caption("Pedagogical hints")
+        for hint in model_result.get("hints", []):
+            st.markdown(f"- {hint}")
+        prefix_name = "binary_assistant"
     elif model_result.get("family") == "bondi_hoyle":
         st.plotly_chart(model_lab_bondi_hoyle_plot(model_result, result), use_container_width=True)
         if st.session_state.get("l1_model_lab_show_time_model", True):
@@ -3657,7 +3892,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
     with dl_cols[0]:
         dataframe_download(
             "Download model folded data",
-            pd.DataFrame({
+            parallel_series_dataframe({
                 "phase": model_result.get("phase", []),
                 "flux": model_result.get("flux", []),
                 "error": model_result.get("error", []),
@@ -3669,7 +3904,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
     with dl_cols[1]:
         dataframe_download(
             "Download phase model",
-            pd.DataFrame({
+            parallel_series_dataframe({
                 "phase": model_result.get("model_phase", []),
                 "model_flux": model_result.get("model_flux", []),
             }),
@@ -3679,7 +3914,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
     with dl_cols[2]:
         dataframe_download(
             "Download time-domain model",
-            pd.DataFrame({
+            parallel_series_dataframe({
                 "time": model_result.get("model_time", []),
                 "model_flux": model_result.get("model_time_flux", []),
             }),

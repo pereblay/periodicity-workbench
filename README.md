@@ -16,11 +16,13 @@ It supports:
 - Sampling-window inspection and tentative artefact classification.
 - Local residual bootstrap errors for detected peaks.
 - Iterative prewhitening with user-selected periods.
+- Compact harmonic diagnostics and prewhitening quality metrics.
 - A second Lomb-Scargle search on prewhitened residuals.
 - Orbital phase folding with user-selected `T0` and number of phase bins.
 - Folded-profile fitting with selected periods or harmonics, with maxima marked.
 - Period tomography through sliding Lomb-Scargle and WWZ-style maps.
 - A model laboratory for Fourier multi-harmonic profiles, eclipsing/eccentric binary toy models, Bondi-Hoyle wind-accretion toy models, and X-ray pulse-period timing.
+- A binary interpretation assistant for folded-profile minima, depth ratios, and half-period ambiguity checks.
 - Stellar spectral-type presets for toy binary and wind-accretion models, including OB and A/F/G/K/M representative stars.
 - Download buttons for the plotted data tables.
 - Evidence boxes for student notes and literature comparisons.

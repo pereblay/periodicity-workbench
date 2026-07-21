@@ -249,6 +249,9 @@ y(phi) = C + sum_k [a_k cos(2 pi k phi) + b_k sin(2 pi k phi)]
 **Folded-fit frequencies: selected**
 Allows selected detected periods to be included in the folded model. The first selected period is used as the folding period, while the others enter the fitted model as additional frequencies.
 
+**Harmonic diagnostics**
+After the frequency search, the app checks the primary period, its harmonics (`P/2`, `P/3`, ...), and longer multiples such as `2P` and `3P`. The table reports whether a nearby Lomb-Scargle peak is present, the false-alarm probability, the sampling-window power, and a short interpretation note. The `2P` row is useful for eclipsing binaries, where two similar minima can make the strongest periodogram peak appear at half the true orbital period.
+
 **Sinusoidal fitting**
 Controls how simple sinusoidal models are fitted in folded profiles. The same stored choice is also used as the default for related sinusoidal fits in prewhitening and some Model Laboratory blocks.
 
@@ -287,6 +290,8 @@ Manual period entered by the user. If provided, it overrides the dropdown select
 
 **Next step**
 Adds the selected period to the prewhitening chain and recomputes the residual periodogram.
+
+Each prewhitening step is fitted globally with all periods currently in the chain. The result includes compact diagnostics: RMS reduction, residual Lomb-Scargle peak reduction, AIC, and BIC. These values help decide whether adding another period genuinely improves the model or merely adds flexibility.
 
 **Show model**
 Displays the original data, the prewhitening model evaluated at the data points, a full continuous model, and the residuals.
@@ -412,6 +417,10 @@ Displays the model in the original time domain.
 ## Eclipsing / Eccentric Binary Models
 
 This block provides two simple models for binary-like folded profiles.
+
+## Binary Interpretation Assistant
+
+This Model Laboratory option is a compact morphological diagnostic for folded profiles. It marks the two strongest separated minima, estimates their phase separation, computes a depth-ratio proxy, checks whether the separation is close to 0.5, and flags possible half-period ambiguity using the harmonic diagnostics. It is intended as a guide before trying a more physical eclipsing-binary model, not as a unique binary solution.
 
 ### Eccentric Harmonic Model
 

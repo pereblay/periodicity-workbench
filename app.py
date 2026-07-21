@@ -917,6 +917,122 @@ def prewhitening_terms_from_periods(
     return terms
 
 
+def prewhitening_information_criteria(residuals: np.ndarray, n_params: int) -> dict[str, float]:
+    n = max(1, int(len(residuals)))
+    rss = float(np.sum(np.asarray(residuals, dtype=float) ** 2))
+    variance = max(rss / n, 1e-300)
+    return {
+        "rss": rss,
+        "AIC": float(n * np.log(variance) + 2 * n_params),
+        "BIC": float(n * np.log(variance) + n_params * np.log(n)),
+    }
+
+
+def prewhitening_diagnostics(
+    y: np.ndarray,
+    residuals: np.ndarray,
+    power: np.ndarray,
+    residual_power: np.ndarray,
+    n_terms: int,
+) -> dict[str, float | int]:
+    before_rms = float(np.sqrt(np.mean(y**2))) if len(y) else 0.0
+    after_rms = float(np.sqrt(np.mean(residuals**2))) if len(residuals) else 0.0
+    before_power = float(np.nanmax(power)) if len(power) else 0.0
+    after_power = float(np.nanmax(residual_power)) if len(residual_power) else 0.0
+    n_params = 1 + 2 * int(n_terms)
+    criteria = prewhitening_information_criteria(residuals, n_params)
+    return {
+        "n_terms": int(n_terms),
+        "n_parameters": int(n_params),
+        "rms_before": before_rms,
+        "rms_after": after_rms,
+        "rms_reduction_percent": 0.0 if before_rms <= 0.0 else float(100.0 * (before_rms - after_rms) / before_rms),
+        "max_power_before": before_power,
+        "max_power_after": after_power,
+        "max_power_reduction_percent": 0.0 if before_power <= 0.0 else float(100.0 * (before_power - after_power) / before_power),
+        **criteria,
+    }
+
+
+def harmonic_diagnostics(
+    primary: PeakSummary | None,
+    frequency: np.ndarray,
+    power: np.ndarray,
+    ls: LombScargle,
+    window_power: np.ndarray,
+    max_harmonic_order: int = 8,
+    tolerance: float = 0.04,
+) -> list[dict[str, float | str | bool | None]]:
+    if primary is None:
+        return []
+    rows: list[dict[str, float | str | bool | None]] = []
+    targets: list[tuple[str, float, str]] = [("P", primary.period, "fundamental")]
+    targets.extend((f"P/{order}", primary.period / order, "harmonic") for order in range(2, max_harmonic_order + 1))
+    targets.extend((f"{multiplier}P", primary.period * multiplier, "multiple") for multiplier in (2, 3))
+    for relation, target_period, family in targets:
+        if target_period <= 0.0:
+            continue
+        target_frequency = 1.0 / target_period
+        if target_frequency < frequency.min() or target_frequency > frequency.max():
+            rows.append(
+                {
+                    "relation": relation,
+                    "family": family,
+                    "target_period": float(target_period),
+                    "target_frequency": float(target_frequency),
+                    "nearest_period": None,
+                    "period_delta_percent": None,
+                    "power": None,
+                    "fap": None,
+                    "window_power": None,
+                    "detected": False,
+                    "note": "outside frequency range",
+                }
+            )
+            continue
+        peak = local_lomb_peak(frequency, power, ls, target_frequency, fractional_width=tolerance)
+        nearest_idx = int(np.argmin(np.abs(frequency - target_frequency)))
+        nearest_window = float(window_power[nearest_idx]) if len(window_power) else None
+        if peak is None:
+            rows.append(
+                {
+                    "relation": relation,
+                    "family": family,
+                    "target_period": float(target_period),
+                    "target_frequency": float(target_frequency),
+                    "nearest_period": None,
+                    "period_delta_percent": None,
+                    "power": None,
+                    "fap": None,
+                    "window_power": nearest_window,
+                    "detected": False,
+                    "note": "no local LS maximum",
+                }
+            )
+            continue
+        period_delta_percent = float(100.0 * abs(peak.period - target_period) / max(target_period, 1e-300))
+        detected = bool(period_delta_percent <= 100.0 * tolerance and peak.fap <= 0.2)
+        note = "detected" if detected else "weak or offset"
+        if relation == "2P" and detected:
+            note = "possible half-period ambiguity"
+        rows.append(
+            {
+                "relation": relation,
+                "family": family,
+                "target_period": float(target_period),
+                "target_frequency": float(target_frequency),
+                "nearest_period": float(peak.period),
+                "period_delta_percent": period_delta_percent,
+                "power": float(peak.power),
+                "fap": float(peak.fap),
+                "window_power": nearest_window,
+                "detected": detected,
+                "note": note,
+            }
+        )
+    return rows
+
+
 def folded_profile(
     t: np.ndarray,
     y: np.ndarray,
@@ -2579,6 +2695,7 @@ def empty_analysis_result(
     t0: float | None = None,
     has_error_column: bool = True,
     labels: dict[str, str] | None = None,
+    harmonic_rows: list[dict[str, float | str | bool | None]] | None = None,
 ) -> dict:
     labels = labels or unit_labels("days")
     flux_is_magnitude = str((fields or {}).get("flux_is_magnitude", "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -2611,6 +2728,8 @@ def empty_analysis_result(
         "has_prewhitening": False,
         "prewhiten_periods": [],
         "prewhitening_terms": [],
+        "prewhitening_summary": {},
+        "harmonic_diagnostics": harmonic_rows or [],
         "window_peaks": window_peaks,
         "peaks": [],
         "residual_peaks": [],
@@ -2729,6 +2848,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     add_bootstrap_errors(t, y_analysis, dy, ls, peaks, n_bootstrap, bootstrap_width, 1200, seed=12345)
 
     candidate_peaks = usable_candidate_peaks(peaks)
+    primary_for_harmonics = candidate_peaks[0] if candidate_peaks else primary
+    harmonic_rows = harmonic_diagnostics(primary_for_harmonics, freq, power, ls, win)
     if not candidate_peaks:
         return empty_analysis_result(
             t,
@@ -2745,6 +2866,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             t0=t0,
             has_error_column=has_error_column,
             labels=labels,
+            harmonic_rows=harmonic_rows,
         )
     primary = candidate_peaks[0]
     prewhiten_base_periods = prewhiten_periods
@@ -2817,6 +2939,12 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         prewhitening_display_table = []
         residual_power = np.zeros_like(power)
         residual_peaks = []
+        residuals = y_analysis
+    prewhitening_summary = (
+        prewhitening_diagnostics(y_analysis, residuals, power, residual_power, len(prewhitening_table))
+        if prewhitening_table
+        else {}
+    )
 
     folded_period, fit_ratios, fit_periods = folded_configuration(primary.period, fields)
     folded = folded_profile(t, y, dy, folded_period, t0, fold_bins, fit_ratios, fit_method)
@@ -2836,6 +2964,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "prewhiten_periods": prewhiten_base_periods,
         "prewhitening_terms": prewhitening_table,
         "prewhitening_display_terms": prewhitening_display_table,
+        "prewhitening_summary": prewhitening_summary,
+        "harmonic_diagnostics": harmonic_rows,
         "window_peaks": window_peaks,
         "peaks": [asdict(p) for p in peaks],
         "residual_peaks": [asdict(p) for p in residual_peaks],
