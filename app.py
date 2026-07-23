@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
-__version__ = "1.4.0"
+__version__ = "1.6.0"
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".matplotlib"))
 
 import matplotlib
@@ -24,10 +24,17 @@ import matplotlib
 matplotlib.use(os.environ.get("MPLBACKEND", "Agg"))
 import matplotlib.pyplot as plt
 import numpy as np
+import astropy.units as u
+from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.io import fits
+from astropy.time import Time
 from astropy.timeseries import LombScargle
+from astropy.utils import iers
 from scipy.optimize import least_squares, minimize_scalar
 from scipy.signal import find_peaks
+from scipy.stats import chi2 as chi2_distribution
+
+iers.conf.auto_download = False
 
 
 @dataclass
@@ -70,6 +77,21 @@ M_SUN_SI = 1.98847e30
 R_SUN_SI = 6.957e8
 DAY_SI = 86400.0
 T_SUN_K = 5772.0
+LEO_GEOCENTER_TIMING_LIMIT_SECONDS = 0.025
+FITS_TIMING_KEYS = (
+    "TIMESYS",
+    "TIMEREF",
+    "TASSIGN",
+    "TIMEUNIT",
+    "TIMEZERO",
+    "MJDREF",
+    "MJDREFI",
+    "MJDREFF",
+    "PLEPHEM",
+    "RADECSYS",
+    "RA_NOM",
+    "DEC_NOM",
+)
 
 BHL_DONOR_PRESETS: dict[str, dict[str, dict[str, float]]] = {
     # Approximate pedagogical stellar values. They are intended to seed the toy model,
@@ -321,6 +343,199 @@ def fits_table_metadata(raw: bytes) -> list[dict]:
     if not rows:
         raise ValueError("FITS file does not contain a table extension with scalar numeric columns")
     return rows
+
+
+def fits_timing_metadata(raw: bytes, extension: int, time_column: str) -> dict[str, object]:
+    """Read timing keywords relevant to barycentric provenance."""
+    if not raw:
+        return {}
+    try:
+        hdul = fits.open(io.BytesIO(fits_payload(raw)), memmap=False)
+    except Exception:
+        return {}
+    with hdul:
+        if extension < 0 or extension >= len(hdul):
+            return {}
+        primary_header = hdul[0].header
+        selected_hdu = hdul[extension]
+        selected_header = selected_hdu.header
+        metadata: dict[str, object] = {}
+        for key in FITS_TIMING_KEYS:
+            value = selected_header.get(key, primary_header.get(key))
+            if value is not None:
+                metadata[key.lower()] = value.item() if isinstance(value, np.generic) else value
+        columns = getattr(selected_hdu, "columns", None)
+        if columns is not None:
+            for column in columns:
+                if str(column.name) == str(time_column):
+                    metadata["column_unit"] = "" if column.unit is None else str(column.unit)
+                    break
+        metadata["time_column"] = str(time_column)
+        metadata["extension"] = int(extension)
+        return metadata
+
+
+def timing_unit_days(value: object, fallback_time_unit: str) -> float:
+    unit = str(value or "").strip().lower()
+    if unit in {"s", "sec", "second", "seconds"}:
+        return 1.0 / DAY_SI
+    if unit in {"d", "day", "days"}:
+        return 1.0
+    return 1.0 / DAY_SI if normalize_time_unit(fallback_time_unit) == "seconds" else 1.0
+
+
+def fits_mjd_reference(metadata: dict[str, object]) -> float | None:
+    if metadata.get("mjdref") is not None:
+        return float(metadata["mjdref"])
+    if metadata.get("mjdrefi") is not None or metadata.get("mjdreff") is not None:
+        return float(metadata.get("mjdrefi", 0.0)) + float(metadata.get("mjdreff", 0.0))
+    return None
+
+
+def absolute_mjd_axis(
+    time_values: np.ndarray,
+    time_unit: str,
+    metadata: dict[str, object],
+) -> tuple[np.ndarray, float, str] | None:
+    """Return absolute MJD values, input-unit size in days, and the inference used."""
+    if len(time_values) == 0:
+        return None
+    column_name = str(metadata.get("time_column", "")).strip().upper()
+    input_unit_days = timing_unit_days(metadata.get("column_unit") or metadata.get("timeunit"), time_unit)
+    median_time = float(np.nanmedian(time_values))
+    if "BJD" in column_name:
+        return np.asarray(time_values, dtype=float) - 2400000.5, 1.0, "BJD column"
+    if column_name == "JD" or (2300000.0 <= median_time <= 2700000.0):
+        return np.asarray(time_values, dtype=float) - 2400000.5, 1.0, "JD values"
+    if "MJD" in column_name or (30000.0 <= median_time <= 100000.0 and input_unit_days == 1.0):
+        return np.asarray(time_values, dtype=float), 1.0, "MJD values"
+    mjd_reference = fits_mjd_reference(metadata)
+    if mjd_reference is not None:
+        timezero = float(metadata.get("timezero", 0.0))
+        mjd = mjd_reference + (np.asarray(time_values, dtype=float) + timezero) * input_unit_days
+        return mjd, input_unit_days, "FITS MJDREF/TIMEZERO"
+    return None
+
+
+def barycentric_timing_status(
+    time_values: np.ndarray,
+    fields: dict[str, str],
+    raw: bytes,
+    filename: str,
+    fits_extension: int | None,
+    fits_time_column: str | None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Detect barycentric provenance and apply a geocentric fallback when possible."""
+    is_fits = is_fits_upload(filename, raw)
+    metadata = (
+        fits_timing_metadata(raw, int(fits_extension), str(fits_time_column))
+        if is_fits and fits_extension is not None and fits_time_column
+        else {}
+    )
+    mode = str(fields.get("barycentric_mode", "auto")).strip().lower()
+    timeref = str(metadata.get("timeref", "")).strip().upper()
+    timesys = str(metadata.get("timesys", "")).strip().upper()
+    time_column = str(metadata.get("time_column", "")).strip().upper()
+    base = {
+        "mode": mode,
+        "source_type": "FITS" if is_fits else "ASCII",
+        "timeref": timeref or None,
+        "timesys": timesys or None,
+        "tassign": metadata.get("tassign"),
+        "plephem": metadata.get("plephem"),
+        "correction_applied": False,
+        "correction_min_seconds": None,
+        "correction_max_seconds": None,
+        "spacecraft_position_ignored": False,
+    }
+    if mode == "already_barycentric":
+        return time_values, {
+            **base,
+            "status": "user-confirmed barycentric",
+            "confirmed_barycentric": True,
+            "demonstrative_only": False,
+            "message": "Input times were declared barycentric by the user; no correction was applied.",
+        }
+    if timeref in {"SOLARSYSTEM", "BARYCENTER", "BARYCENTRIC"}:
+        return time_values, {
+            **base,
+            "status": "FITS-confirmed barycentric",
+            "confirmed_barycentric": True,
+            "demonstrative_only": False,
+            "message": f"FITS timing is barycentric (TIMEREF={timeref}, TIMESYS={timesys or 'not recorded'}).",
+        }
+    if "BJD" in time_column:
+        return time_values, {
+            **base,
+            "status": "barycentric inferred from BJD column",
+            "confirmed_barycentric": True,
+            "demonstrative_only": False,
+            "message": "The selected FITS time column is labelled BJD; no additional correction was applied.",
+        }
+    if mode == "uncorrected":
+        return time_values, {
+            **base,
+            "status": "uncorrected/unknown",
+            "confirmed_barycentric": False,
+            "demonstrative_only": True,
+            "message": "Barycentric correction was disabled. Timing results are demonstrative and must not be given a robust physical interpretation.",
+        }
+
+    ra = optional_float(fields.get("target_ra_deg"))
+    dec = optional_float(fields.get("target_dec_deg"))
+    if ra is None and metadata.get("ra_nom") is not None:
+        ra = float(metadata["ra_nom"])
+    if dec is None and metadata.get("dec_nom") is not None:
+        dec = float(metadata["dec_nom"])
+    absolute_axis = absolute_mjd_axis(time_values, fields.get("time_unit", "days"), metadata)
+    if ra is None or dec is None or absolute_axis is None:
+        missing = []
+        if ra is None or dec is None:
+            missing.append("target coordinates")
+        if absolute_axis is None:
+            missing.append("an absolute MJD/JD epoch")
+        return time_values, {
+            **base,
+            "status": "correction unavailable",
+            "confirmed_barycentric": False,
+            "demonstrative_only": True,
+            "message": "Could not apply the geocentric approximation because " + " and ".join(missing) + ". Timing results are demonstrative and have no robust physical timing interpretation.",
+        }
+
+    mjd, input_unit_days, inference = absolute_axis
+    scale = timesys.lower() if timesys.lower() in {"utc", "tai", "tt", "tdb", "tcb", "tcg"} else ("tt" if is_fits else "utc")
+    try:
+        location = EarthLocation.from_geocentric(0.0, 0.0, 0.0, unit=u.m)
+        target = SkyCoord(ra=float(ra) * u.deg, dec=float(dec) * u.deg, frame="icrs")
+        observed = Time(mjd, format="mjd", scale=scale, location=location)
+        barycentric = observed.tdb + observed.light_travel_time(target, kind="barycentric")
+        correction_days = np.asarray(barycentric.mjd - observed.mjd, dtype=float)
+        corrected = np.asarray(time_values, dtype=float) + correction_days / input_unit_days
+    except Exception as exc:
+        return time_values, {
+            **base,
+            "status": "geocentric correction failed",
+            "confirmed_barycentric": False,
+            "demonstrative_only": True,
+            "message": f"The approximate geocentric correction failed ({exc}). Timing results are demonstrative only.",
+        }
+    correction_seconds = correction_days * DAY_SI
+    return corrected, {
+        **base,
+        "status": "approximate geocentric-to-barycentric correction",
+        "confirmed_barycentric": False,
+        "demonstrative_only": True,
+        "correction_applied": True,
+        "correction_min_seconds": float(np.nanmin(correction_seconds)),
+        "correction_max_seconds": float(np.nanmax(correction_seconds)),
+        "spacecraft_position_ignored": True,
+        "assumed_time_scale": scale.upper(),
+        "absolute_time_inference": inference,
+        "target_ra_deg": float(ra),
+        "target_dec_deg": float(dec),
+        "spacecraft_systematic_limit_seconds": LEO_GEOCENTER_TIMING_LIMIT_SECONDS,
+        "message": "Applied an approximate geocenter-to-Solar-System-barycenter correction. The satellite orbit was ignored (up to about 25 ms for a low-Earth-orbit satellite), so timing results remain demonstrative and must not be assigned a robust physical interpretation.",
+    }
 
 
 def read_fits_columns(
@@ -2244,10 +2459,11 @@ def epoch_folding_statistic(
     periods: np.ndarray,
     n_bins: int,
     t0: float,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     weights = safe_weights(dy, "standard")
     global_mean = float(np.average(y, weights=weights))
     stats = np.full_like(periods, np.nan, dtype=float)
+    dofs = np.full_like(periods, np.nan, dtype=float)
     for idx, period in enumerate(periods):
         phase = ((t - t0) / period) % 1.0
         centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
@@ -2255,7 +2471,8 @@ def epoch_folding_statistic(
         if good.sum() < 3:
             continue
         stats[idx] = float(np.sum(((means[good] - global_mean) / errors[good]) ** 2))
-    return stats
+        dofs[idx] = float(good.sum() - 1)
+    return stats, dofs
 
 
 def interp_periodic_template(phase: np.ndarray, template_phase: np.ndarray, template_flux: np.ndarray) -> np.ndarray:
@@ -2279,17 +2496,18 @@ def estimate_pulse_arrivals(
     harmonic_ratios: list[float],
     n_segments: int,
     min_points: int,
+    template_mode: str = "global_fourier",
 ) -> tuple[list[dict[str, float | int]], np.ndarray, np.ndarray]:
     n_segments = max(2, int(n_segments))
     min_points = max(4, int(min_points))
     edges = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), n_segments + 1)
     template_phase = np.linspace(0.0, 1.0, 1500, endpoint=False)
-    template_flux = sinusoid_design(template_phase, harmonic_ratios) @ coeff
-    template_flux = template_flux - float(np.nanmean(template_flux))
+    global_template_flux = sinusoid_design(template_phase, harmonic_ratios) @ coeff
+    global_template_flux = global_template_flux - float(np.nanmean(global_template_flux))
     rows: list[dict[str, float | int]] = []
     raw_shifts: list[float] = []
-    centers_for_unwrap: list[float] = []
 
+    segment_masks: list[tuple[int, float, float, np.ndarray]] = []
     for seg_idx, (low, high) in enumerate(zip(edges[:-1], edges[1:]), start=1):
         if seg_idx == n_segments:
             mask = (t >= low) & (t <= high)
@@ -2297,12 +2515,38 @@ def estimate_pulse_arrivals(
             mask = (t >= low) & (t < high)
         if int(mask.sum()) < min_points:
             continue
+        segment_masks.append((seg_idx, float(low), float(high), mask))
+
+    reference_coeff = coeff
+    if template_mode == "highest_snr_segment" and segment_masks:
+        def segment_snr(item: tuple[int, float, float, np.ndarray]) -> float:
+            mask = item[3]
+            noise = float(np.nanmedian(dy[mask][np.isfinite(dy[mask]) & (dy[mask] > 0.0)])) if np.any(np.isfinite(dy[mask]) & (dy[mask] > 0.0)) else 1.0
+            return float(np.nanstd(y[mask]) / max(noise, 1e-12) * np.sqrt(mask.sum()))
+        reference_mask = max(segment_masks, key=segment_snr)[3]
+        reference_phase = ((t[reference_mask] - t0) / period) % 1.0
+        if int(reference_mask.sum()) >= len(coeff) + 2:
+            _, reference_coeff, _ = fit_sinusoids(reference_phase, y[reference_mask], dy[reference_mask], harmonic_ratios)
+
+    for seg_idx, low, high, mask in segment_masks:
         seg_t = t[mask]
         seg_y = y[mask]
         seg_dy = dy[mask]
         phase = ((seg_t - t0) / period) % 1.0
         weights = safe_weights(seg_dy, "standard")
         sqrt_weights = np.sqrt(weights)
+        segment_coeff = reference_coeff
+        segment_template_mode = template_mode
+        if template_mode == "leave_one_out":
+            outside = ~mask
+            if int(outside.sum()) >= max(min_points, len(coeff) + 2):
+                outside_phase = ((t[outside] - t0) / period) % 1.0
+                _, segment_coeff, _ = fit_sinusoids(outside_phase, y[outside], dy[outside], harmonic_ratios)
+            else:
+                segment_coeff = coeff
+                segment_template_mode = "global_fourier_fallback"
+        template_flux = sinusoid_design(template_phase, harmonic_ratios) @ segment_coeff
+        template_flux = template_flux - float(np.nanmean(template_flux))
 
         def shifted_score(shift: float) -> float:
             template = interp_periodic_template((phase - shift) % 1.0, template_phase, template_flux)
@@ -2320,16 +2564,19 @@ def estimate_pulse_arrivals(
         refined = minimize_scalar(shifted_score, bounds=(left, right), method="bounded")
         shift = float(refined.x)
         chi2 = float(refined.fun)
+        dof = max(1, int(mask.sum()) - 2)
+        profile_threshold = max(1.0, chi2 / dof)
         dense = np.linspace(max(-0.5, shift - 0.08), min(0.5, shift + 0.08), 321)
         dense_scores = np.asarray([shifted_score(value) for value in dense], dtype=float)
-        inside = dense[dense_scores <= chi2 + 1.0]
+        inside = dense[dense_scores <= chi2 + profile_threshold]
         if len(inside) >= 2:
             shift_error = 0.5 * float(inside.max() - inside.min())
         else:
             shift_error = float("nan")
         center = 0.5 * float(low + high)
+        cycle_number = int(np.rint((center - t0) / period))
+        calculated_arrival = float(t0 + cycle_number * period)
         raw_shifts.append(shift)
-        centers_for_unwrap.append(center)
         rows.append(
             {
                 "segment": seg_idx,
@@ -2339,67 +2586,204 @@ def estimate_pulse_arrivals(
                 "n_points": int(mask.sum()),
                 "phase_shift": shift,
                 "phase_shift_error": shift_error if np.isfinite(shift_error) else None,
-                "arrival_time": center + shift * period,
-                "arrival_time_error": shift_error * period if np.isfinite(shift_error) else None,
+                "cycle_number": cycle_number,
+                "calculated_arrival_time": calculated_arrival,
                 "chi2": chi2,
+                "chi2_red": chi2 / dof,
+                "template_mode": segment_template_mode,
+                "uncertainty_method": "profile likelihood (Delta chi2 scaled by reduced chi2)",
             }
         )
 
     if not rows:
-        return rows, template_phase, template_flux
+        return rows, template_phase, global_template_flux
 
     unwrapped = np.unwrap(2.0 * np.pi * np.asarray(raw_shifts, dtype=float)) / (2.0 * np.pi)
-    reference_shift = float(np.nanmedian(unwrapped))
     for row, unwrapped_shift in zip(rows, unwrapped):
         row["phase_shift_unwrapped"] = float(unwrapped_shift)
-        row["oc_time"] = float((unwrapped_shift - reference_shift) * period)
-    return rows, template_phase, template_flux
+        arrival_time = float(row["calculated_arrival_time"] + unwrapped_shift * period)
+        arrival_error = row.get("phase_shift_error")
+        row["arrival_time"] = arrival_time
+        row["arrival_time_error"] = float(arrival_error * period) if arrival_error is not None else None
+        row["oc_time"] = float(arrival_time - row["calculated_arrival_time"])
+        row["toa_status"] = "candidate template phase-zero TOA"
+    return rows, template_phase, global_template_flux
 
 
-def fit_oc_sinusoid(
+def fit_spin_ephemeris(
     arrivals: list[dict[str, float | int]],
-    orbital_period: float | None,
+    period_guess: float,
     t_ref: float,
-) -> tuple[np.ndarray, np.ndarray, list[dict[str, float | str]], dict[str, float | str], str] | None:
-    if orbital_period is None or not np.isfinite(orbital_period) or orbital_period <= 0.0 or len(arrivals) < 4:
-        return None
-    time = np.asarray([float(row["time"]) for row in arrivals], dtype=float)
-    oc = np.asarray([float(row["oc_time"]) for row in arrivals], dtype=float)
+    include_frequency_derivative: bool,
+) -> dict:
+    if len(arrivals) < 3:
+        return {}
+    time = np.asarray([float(row["arrival_time"]) for row in arrivals], dtype=float)
+    cycles = np.asarray([float(row["cycle_number"]) for row in arrivals], dtype=float)
     err = np.asarray([
         float(row["arrival_time_error"]) if row.get("arrival_time_error") is not None else np.nan
         for row in arrivals
     ], dtype=float)
     if not np.any(np.isfinite(err) & (err > 0.0)):
-        err = np.ones_like(oc)
+        err = np.full_like(time, max(period_guess * 0.05, 1e-12))
     else:
         fallback = float(np.nanmedian(err[np.isfinite(err) & (err > 0.0)]))
         err = np.where(np.isfinite(err) & (err > 0.0), err, fallback)
-    frequency = 1.0 / orbital_period
-    model_at_arrivals, coeff, summary = fit_sinusoids(time - t_ref, oc, err, [frequency], method="standard")
-    model_time = np.linspace(float(np.nanmin(time)), float(np.nanmax(time)), 1000)
-    model_oc = sinusoid_design(model_time - t_ref, [frequency]) @ coeff
-    amplitude = float(np.hypot(coeff[1], coeff[2]))
-    phase_of_max = float((np.arctan2(coeff[2], coeff[1]) / (2.0 * np.pi)) % 1.0)
-    parameters = [
-        {"parameter": "oc_offset", "value": float(coeff[0])},
-        {"parameter": "oc_cos_coeff", "value": float(coeff[1])},
-        {"parameter": "oc_sin_coeff", "value": float(coeff[2])},
-        {"parameter": "oc_amplitude_time", "value": amplitude},
-        {"parameter": "projected_a_sini_proxy", "value": amplitude},
-        {"parameter": "orbital_phase_of_max_delay", "value": phase_of_max},
-        {"parameter": "orbital_period", "value": orbital_period},
-    ]
-    residuals = oc - model_at_arrivals
-    aic, bic = information_criteria(residuals, len(coeff))
-    summary = {
-        **summary,
-        "orbital_period": orbital_period,
-        "oc_amplitude_time": amplitude,
-        "phase_of_max_delay": phase_of_max,
-        "AIC": aic,
-        "BIC": bic,
+    dt = time - t_ref
+    phase_err = np.maximum(err / period_guess, 1e-12)
+
+    def solve(order: int) -> dict:
+        design = np.column_stack([np.ones_like(dt), dt] + ([0.5 * dt**2] if order == 2 else []))
+        weights = 1.0 / phase_err**2
+        normal = design.T @ (design * weights[:, None])
+        covariance = np.linalg.pinv(normal)
+        coeff = covariance @ (design.T @ (cycles * weights))
+        phase_model = design @ coeff
+        residual_phase = cycles - phase_model
+        chi2_value = float(np.sum((residual_phase / phase_err) ** 2))
+        dof = max(1, len(cycles) - len(coeff))
+        covariance = covariance * max(1.0, chi2_value / dof)
+        aic, bic = information_criteria(residual_phase, len(coeff))
+        return {"coeff": coeff, "covariance": covariance, "phase_model": phase_model, "residual_phase": residual_phase, "chi2": chi2_value, "chi2_red": chi2_value / dof, "AIC": aic, "BIC": bic}
+
+    linear = solve(1)
+    quadratic = solve(2) if include_frequency_derivative and len(arrivals) >= 5 else None
+    selected = quadratic if quadratic is not None and float(quadratic["BIC"]) + 2.0 < float(linear["BIC"]) else linear
+    coeff = np.asarray(selected["coeff"], dtype=float)
+    covariance = np.asarray(selected["covariance"], dtype=float)
+    frequency = float(coeff[1])
+    frequency_derivative = float(coeff[2]) if len(coeff) > 2 else 0.0
+    predicted_time: list[float] = []
+    for cycle in cycles:
+        target = float(cycle - coeff[0])
+        if abs(frequency_derivative) < 1e-18:
+            root = target / frequency
+        else:
+            roots = np.roots([0.5 * frequency_derivative, frequency, -target])
+            real_roots = [float(value.real) for value in roots if abs(value.imag) < 1e-8]
+            root = min(real_roots, key=lambda value: abs(value - target / frequency)) if real_roots else target / frequency
+        predicted_time.append(float(t_ref + root))
+    time_residual = time - np.asarray(predicted_time)
+    for row, calc_time, residual in zip(arrivals, predicted_time, time_residual):
+        row["spin_model_calculated_time"] = calc_time
+        row["spin_model_residual_time"] = float(residual)
+    errors = np.sqrt(np.maximum(0.0, np.diag(covariance)))
+    max_phase_residual = float(np.nanmax(np.abs(np.asarray(selected["residual_phase"]))))
+    cycle_steps = np.diff(cycles)
+    connection_candidate = bool(np.all(cycle_steps > 0.0) and max_phase_residual < 0.5)
+    return {
+        "model": "F0+F1" if len(coeff) > 2 else "F0",
+        "reference_time": t_ref,
+        "phase0": float(coeff[0]),
+        "phase0_error": float(errors[0]),
+        "frequency": frequency,
+        "frequency_error": float(errors[1]),
+        "period": float(1.0 / frequency),
+        "period_error": float(errors[1] / frequency**2),
+        "frequency_derivative": frequency_derivative,
+        "frequency_derivative_error": float(errors[2]) if len(errors) > 2 else None,
+        "chi2_red": float(selected["chi2_red"]),
+        "AIC": float(selected["AIC"]),
+        "BIC": float(selected["BIC"]),
+        "linear_BIC": float(linear["BIC"]),
+        "quadratic_BIC": float(quadratic["BIC"]) if quadratic is not None else None,
+        "rms_time_residual": float(np.sqrt(np.mean(time_residual**2))),
+        "max_abs_phase_residual": max_phase_residual,
+        "phase_connection": "candidate; integer cycles assumed, not independently proven" if connection_candidate else "not secure",
+        "formula": "phi(t) = phi0 + F0 (t-Tref) + 0.5 F1 (t-Tref)^2",
     }
-    formula = "O-C(t) = C + A_c cos(2 pi (t-Tref)/P_orb) + A_s sin(2 pi (t-Tref)/P_orb)"
+
+
+def keplerian_roemer_delay(time: np.ndarray, period: float, t_periastron: float, eccentricity: float, omega: float, projected_time: float, offset: float) -> np.ndarray:
+    mean_anomaly = 2.0 * np.pi * (time - t_periastron) / period
+    eccentric_anomaly = solve_kepler(mean_anomaly, eccentricity)
+    return offset + projected_time * (
+        np.sin(omega) * (np.cos(eccentric_anomaly) - eccentricity)
+        + np.sqrt(max(0.0, 1.0 - eccentricity**2)) * np.cos(omega) * np.sin(eccentric_anomaly)
+    )
+
+
+def fit_oc_orbit(
+    arrivals: list[dict[str, float | int]],
+    model_kind: str,
+    orbital_period: float | None,
+    t_ref: float,
+    fit_period: bool = False,
+    period_width: float = 0.2,
+    eccentricity_guess: float = 0.1,
+    omega_guess_deg: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, float | str]], dict[str, float | str], str] | None:
+    minimum = 6 if model_kind == "keplerian" else 4
+    if model_kind == "none" or orbital_period is None or not np.isfinite(orbital_period) or orbital_period <= 0.0 or len(arrivals) < minimum:
+        return None
+    time = np.asarray([float(row["arrival_time"]) for row in arrivals], dtype=float)
+    oc = np.asarray([float(row.get("spin_model_residual_time", row["oc_time"])) for row in arrivals], dtype=float)
+    err = np.asarray([float(row["arrival_time_error"]) if row.get("arrival_time_error") is not None else np.nan for row in arrivals], dtype=float)
+    fallback = float(np.nanmedian(err[np.isfinite(err) & (err > 0.0)])) if np.any(np.isfinite(err) & (err > 0.0)) else max(float(np.nanstd(oc)), 1e-12)
+    err = np.where(np.isfinite(err) & (err > 0.0), err, fallback)
+    model_time = np.linspace(float(np.nanmin(time)), float(np.nanmax(time)), 1000)
+    period_width = min(0.9, max(0.001, period_width))
+    parameter_errors: dict[str, float | None] = {}
+    if model_kind == "circular":
+        if fit_period:
+            def residual(params: np.ndarray) -> np.ndarray:
+                p, offset, cos_amp, sin_amp = params
+                angle = 2.0 * np.pi * (time - t_ref) / p
+                return (offset + cos_amp * np.cos(angle) + sin_amp * np.sin(angle) - oc) / err
+            initial = np.asarray([orbital_period, np.nanmean(oc), np.nanstd(oc), 0.0])
+            lower = [orbital_period * (1.0 - period_width), -np.inf, -np.inf, -np.inf]
+            upper = [orbital_period * (1.0 + period_width), np.inf, np.inf, np.inf]
+            fit = least_squares(residual, initial, bounds=(lower, upper), max_nfev=5000)
+            period, offset, cos_amp, sin_amp = map(float, fit.x)
+            covariance = np.linalg.pinv(fit.jac.T @ fit.jac) * max(1.0, float(np.sum(fit.fun**2) / max(1, len(time) - len(fit.x))))
+            fitted_errors = np.sqrt(np.maximum(0.0, np.diag(covariance)))
+            parameter_errors.update({"orbital_period": float(fitted_errors[0]), "oc_offset": float(fitted_errors[1]), "cos_coeff": float(fitted_errors[2]), "sin_coeff": float(fitted_errors[3])})
+        else:
+            period = orbital_period
+            angle = 2.0 * np.pi * (time - t_ref) / period
+            design = np.column_stack([np.ones_like(time), np.cos(angle), np.sin(angle)])
+            coeff, *_ = np.linalg.lstsq(design / err[:, None], oc / err, rcond=None)
+            offset, cos_amp, sin_amp = map(float, coeff)
+            covariance = np.linalg.pinv(design.T @ (design / err[:, None] ** 2))
+            fitted_errors = np.sqrt(np.maximum(0.0, np.diag(covariance)))
+            parameter_errors.update({"orbital_period": None, "oc_offset": float(fitted_errors[0]), "cos_coeff": float(fitted_errors[1]), "sin_coeff": float(fitted_errors[2])})
+        model_oc = offset + cos_amp * np.cos(2.0 * np.pi * (model_time - t_ref) / period) + sin_amp * np.sin(2.0 * np.pi * (model_time - t_ref) / period)
+        fitted = offset + cos_amp * np.cos(2.0 * np.pi * (time - t_ref) / period) + sin_amp * np.sin(2.0 * np.pi * (time - t_ref) / period)
+        amplitude = float(np.hypot(cos_amp, sin_amp))
+        if amplitude > 0.0:
+            amp_cov = covariance[-2:, -2:]
+            amp_grad = np.asarray([cos_amp / amplitude, sin_amp / amplitude])
+            parameter_errors["projected_light_travel_time"] = float(np.sqrt(max(0.0, amp_grad @ amp_cov @ amp_grad)))
+        parameters = [{"parameter": name, "value": value, "error": parameter_errors.get(name)} for name, value in [("orbital_period", period), ("oc_offset", offset), ("projected_light_travel_time", amplitude), ("cos_coeff", cos_amp), ("sin_coeff", sin_amp)]]
+        formula = "Delta_R = C + A_c cos(2 pi (t-Tref)/P_orb) + A_s sin(2 pi (t-Tref)/P_orb)"
+    else:
+        amplitude_guess = max(float(np.nanstd(oc)) * np.sqrt(2.0), fallback)
+        initial = np.asarray([orbital_period, t_ref, np.clip(eccentricity_guess, 0.0, 0.9), np.deg2rad(omega_guess_deg), amplitude_guess, np.nanmean(oc)])
+        if fit_period:
+            p_low, p_high = orbital_period * (1.0 - period_width), orbital_period * (1.0 + period_width)
+        else:
+            p_low, p_high = orbital_period * (1.0 - 1e-10), orbital_period * (1.0 + 1e-10)
+        lower = [p_low, float(np.nanmin(time)) - orbital_period, 0.0, -2.0 * np.pi, -10.0 * amplitude_guess, -np.inf]
+        upper = [p_high, float(np.nanmax(time)) + orbital_period, 0.95, 2.0 * np.pi, 10.0 * amplitude_guess, np.inf]
+        fit = least_squares(lambda params: (keplerian_roemer_delay(time, *params) - oc) / err, initial, bounds=(lower, upper), max_nfev=10000)
+        period, t_periastron, eccentricity, omega, projected_time, offset = map(float, fit.x)
+        covariance = np.linalg.pinv(fit.jac.T @ fit.jac) * max(1.0, float(np.sum(fit.fun**2) / max(1, len(time) - len(fit.x))))
+        fitted_errors = np.sqrt(np.maximum(0.0, np.diag(covariance)))
+        fitted = keplerian_roemer_delay(time, *fit.x)
+        model_oc = keplerian_roemer_delay(model_time, *fit.x)
+        parameters = [
+            {"parameter": "orbital_period", "value": period, "error": float(fitted_errors[0]) if fit_period else None},
+            {"parameter": "t_periastron", "value": t_periastron, "error": float(fitted_errors[1])},
+            {"parameter": "eccentricity", "value": eccentricity, "error": float(fitted_errors[2])},
+            {"parameter": "omega_deg", "value": float(np.rad2deg(omega) % 360.0), "error": float(np.rad2deg(fitted_errors[3]))},
+            {"parameter": "projected_light_travel_time", "value": projected_time, "error": float(fitted_errors[4])},
+            {"parameter": "oc_offset", "value": offset, "error": float(fitted_errors[5])},
+        ]
+        formula = "Delta_R = C + x[sin(omega)(cos(E)-e) + sqrt(1-e^2) cos(omega) sin(E)]"
+    residuals = oc - fitted
+    n_fitted_parameters = (4 if fit_period else 3) if model_kind == "circular" else (6 if fit_period else 5)
+    aic, bic = information_criteria(residuals, n_fitted_parameters)
+    summary = {"model": model_kind, "orbital_period": period, "projected_light_travel_time": amplitude if model_kind == "circular" else projected_time, "AIC": aic, "BIC": bic, "rms": float(np.sqrt(np.mean(residuals**2))), "fit_period": bool(fit_period)}
     return model_time, model_oc, parameters, summary, formula
 
 
@@ -2433,7 +2817,25 @@ def pulse_period_model_lab(result: dict, fields: dict[str, str]) -> dict:
     n_segments = max(2, int(fields.get("model_lab_pulse_segments", "8")))
     min_points = max(4, int(fields.get("model_lab_pulse_min_points", "20")))
     fit_method = normalize_fit_method(fields.get("model_lab_pulse_fit_method", fields.get("model_fit_method", "standard")))
+    template_mode = str(fields.get("model_lab_pulse_template_mode", "global_fourier"))
+    if template_mode not in {"global_fourier", "leave_one_out", "highest_snr_segment"}:
+        template_mode = "global_fourier"
+    mc_iterations = max(0, min(500, int(fields.get("model_lab_pulse_mc_iterations", "100"))))
+    background = optional_float(fields.get("model_lab_pulse_background"))
+    background = 0.0 if background is None else float(background)
+    fit_frequency_derivative = str(fields.get("model_lab_pulse_fit_frequency_derivative", "true")).lower() in {"1", "true", "yes", "on"}
+    orbital_model = str(fields.get("model_lab_pulse_orbital_model", "none"))
+    if orbital_model not in {"none", "circular", "keplerian"}:
+        orbital_model = "none"
     orbital_period = optional_float(fields.get("model_lab_pulse_orbital_period"))
+    orbital_fit_period = str(fields.get("model_lab_pulse_orbital_fit_period", "false")).lower() in {"1", "true", "yes", "on"}
+    orbital_period_width = max(0.1, float(fields.get("model_lab_pulse_orbital_period_width", "20"))) / 100.0
+    orbital_eccentricity = float(fields.get("model_lab_pulse_orbital_eccentricity", "0.1"))
+    orbital_omega = float(fields.get("model_lab_pulse_orbital_omega", "0"))
+    if orbital_model != "none" and (orbital_period is None or orbital_period <= 0.0):
+        raise ValueError("A positive trial orbital period is required for an O-C orbital model")
+    if not 0.0 <= orbital_eccentricity < 0.95:
+        raise ValueError("Initial orbital eccentricity must be between 0 and 0.95")
 
     if search_width > 0.0:
         low = max(period_guess * (1.0 - search_width), np.finfo(float).eps)
@@ -2441,10 +2843,15 @@ def pulse_period_model_lab(result: dict, fields: dict[str, str]) -> dict:
         trial_periods = np.linspace(low, high, n_trials)
     else:
         trial_periods = np.asarray([period_guess], dtype=float)
-    epoch_power = epoch_folding_statistic(t, y, dy, trial_periods, epoch_bins, t0)
+    epoch_power, epoch_dof = epoch_folding_statistic(t, y, dy, trial_periods, epoch_bins, t0)
     best_idx = int(np.nanargmax(epoch_power)) if np.any(np.isfinite(epoch_power)) else 0
     best_period = float(trial_periods[best_idx])
     best_epoch_power = float(epoch_power[best_idx]) if np.isfinite(epoch_power[best_idx]) else None
+    best_epoch_dof = float(epoch_dof[best_idx]) if np.isfinite(epoch_dof[best_idx]) else None
+    single_trial_p = float(chi2_distribution.sf(best_epoch_power, best_epoch_dof)) if best_epoch_power is not None and best_epoch_dof is not None else None
+    trials_corrected_fap = float(-np.expm1(len(trial_periods) * np.log1p(-single_trial_p))) if single_trial_p is not None else None
+    grid_resolution = float(np.nanmedian(np.diff(trial_periods))) if len(trial_periods) > 1 else None
+    best_at_boundary = bool(best_idx in {0, len(trial_periods) - 1})
 
     phase = ((t - t0) / best_period) % 1.0
     centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
@@ -2461,10 +2868,46 @@ def pulse_period_model_lab(result: dict, fields: dict[str, str]) -> dict:
     profile_min = float(np.nanmin(model_flux))
     profile_max = float(np.nanmax(model_flux))
     profile_mean = float(coeff[0])
-    peak_to_peak_pf = float((profile_max - profile_min) / (profile_max + profile_min)) if abs(profile_max + profile_min) > 1e-12 else None
-    rms_pf = float(
-        np.sqrt(np.sum([coeff[1 + 2 * idx] ** 2 + coeff[2 + 2 * idx] ** 2 for idx in range(n_harmonics)]) / 2.0) / abs(profile_mean)
-    ) if abs(profile_mean) > 1e-12 else None
+    net_mean = profile_mean - background
+    peak_denominator = profile_max + profile_min - 2.0 * background
+    peak_to_peak_pf = float((profile_max - profile_min) / peak_denominator) if net_mean > 0.0 and peak_denominator > 0.0 else None
+    design = sinusoid_design(phase, harmonic_ratios)
+    weights = safe_weights(dy, fit_method)
+    covariance = np.linalg.pinv(design.T @ (design * weights[:, None])) * max(1.0, float(summary.get("chi2_red") or 1.0))
+    harmonic_power = sum(max(0.0, coeff[1 + 2 * idx] ** 2 + coeff[2 + 2 * idx] ** 2 - covariance[1 + 2 * idx, 1 + 2 * idx] - covariance[2 + 2 * idx, 2 + 2 * idx]) for idx in range(n_harmonics))
+    rms_pf = float(np.sqrt(0.5 * harmonic_power) / net_mean) if net_mean > 0.0 else None
+    pf_warning = None if net_mean > 0.0 else "Background-subtracted mean is non-positive; pulsed fractions are undefined."
+    rng = np.random.default_rng(24681357)
+    pf_peak_samples: list[float] = []
+    pf_rms_samples: list[float] = []
+    if mc_iterations > 0 and net_mean > 0.0:
+        for draw in rng.multivariate_normal(coeff, covariance, size=mc_iterations, check_valid="ignore"):
+            draw_flux = sinusoid_design(model_phase % 1.0, harmonic_ratios) @ draw
+            draw_net_mean = float(draw[0] - background)
+            if draw_net_mean <= 0.0:
+                continue
+            draw_denominator = float(np.nanmax(draw_flux) + np.nanmin(draw_flux) - 2.0 * background)
+            if draw_denominator > 0.0:
+                pf_peak_samples.append(float((np.nanmax(draw_flux) - np.nanmin(draw_flux)) / draw_denominator))
+            draw_power = sum(max(0.0, draw[1 + 2 * idx] ** 2 + draw[2 + 2 * idx] ** 2 - covariance[1 + 2 * idx, 1 + 2 * idx] - covariance[2 + 2 * idx, 2 + 2 * idx]) for idx in range(n_harmonics))
+            pf_rms_samples.append(float(np.sqrt(0.5 * draw_power) / draw_net_mean))
+
+    period_samples: list[float] = []
+    null_maxima: list[float] = []
+    if mc_iterations > 0 and len(trial_periods) > 1:
+        residual_pool = y - model_at_data
+        for _ in range(mc_iterations):
+            boot_y = model_at_data + rng.choice(residual_pool, size=len(y), replace=True)
+            boot_power, _ = epoch_folding_statistic(t, boot_y, dy, trial_periods, epoch_bins, t0)
+            if np.any(np.isfinite(boot_power)):
+                period_samples.append(float(trial_periods[int(np.nanargmax(boot_power))]))
+            perm_power, _ = epoch_folding_statistic(t, rng.permutation(y), dy, trial_periods, epoch_bins, t0)
+            if np.any(np.isfinite(perm_power)):
+                null_maxima.append(float(np.nanmax(perm_power)))
+    period_error = float(np.std(period_samples, ddof=1)) if len(period_samples) > 1 else None
+    period_p16 = float(np.percentile(period_samples, 16)) if period_samples else None
+    period_p84 = float(np.percentile(period_samples, 84)) if period_samples else None
+    empirical_fap = float((1 + np.sum(np.asarray(null_maxima) >= best_epoch_power)) / (len(null_maxima) + 1)) if null_maxima and best_epoch_power is not None else None
     arrivals, template_phase, template_flux = estimate_pulse_arrivals(
         t,
         y,
@@ -2475,8 +2918,10 @@ def pulse_period_model_lab(result: dict, fields: dict[str, str]) -> dict:
         harmonic_ratios,
         n_segments,
         min_points,
+        template_mode,
     )
-    oc_fit = fit_oc_sinusoid(arrivals, orbital_period, t0)
+    spin_summary = fit_spin_ephemeris(arrivals, best_period, t0, fit_frequency_derivative)
+    oc_fit = fit_oc_orbit(arrivals, orbital_model, orbital_period, t0, orbital_fit_period, orbital_period_width, orbital_eccentricity, orbital_omega)
     if oc_fit is None:
         oc_model_time = np.asarray([], dtype=float)
         oc_model = np.asarray([], dtype=float)
@@ -2509,8 +2954,25 @@ def pulse_period_model_lab(result: dict, fields: dict[str, str]) -> dict:
         "best_period": best_period,
         "T0": t0,
         "epoch_folding_statistic": best_epoch_power,
+        "epoch_folding_dof": best_epoch_dof,
+        "epoch_single_trial_p": single_trial_p,
+        "epoch_trials_corrected_fap": trials_corrected_fap,
+        "epoch_empirical_fap": empirical_fap,
+        "period_error_mc": period_error,
+        "period_p16_mc": period_p16,
+        "period_p84_mc": period_p84,
+        "period_grid_resolution": grid_resolution,
+        "period_best_at_boundary": best_at_boundary,
+        "mc_iterations": mc_iterations,
         "peak_to_peak_pulsed_fraction": peak_to_peak_pf,
+        "peak_to_peak_pulsed_fraction_p16": float(np.percentile(pf_peak_samples, 16)) if pf_peak_samples else None,
+        "peak_to_peak_pulsed_fraction_p84": float(np.percentile(pf_peak_samples, 84)) if pf_peak_samples else None,
         "rms_pulsed_fraction": rms_pf,
+        "rms_pulsed_fraction_p16": float(np.percentile(pf_rms_samples, 16)) if pf_rms_samples else None,
+        "rms_pulsed_fraction_p84": float(np.percentile(pf_rms_samples, 84)) if pf_rms_samples else None,
+        "pulsed_fraction_background": background,
+        "pulsed_fraction_warning": pf_warning,
+        "template_mode": template_mode,
         "AIC": aic,
         "BIC": bic,
         "n_parameters": len(coeff),
@@ -2540,6 +3002,7 @@ def pulse_period_model_lab(result: dict, fields: dict[str, str]) -> dict:
         "summary": summary,
         "trial_period": trial_periods.tolist(),
         "epoch_power": epoch_power.tolist(),
+        "epoch_dof": epoch_dof.tolist(),
         "template_phase": template_phase.tolist(),
         "template_flux": template_flux.tolist(),
         "arrivals": arrivals,
@@ -2547,6 +3010,7 @@ def pulse_period_model_lab(result: dict, fields: dict[str, str]) -> dict:
         "oc_model": oc_model.tolist(),
         "oc_parameters": oc_parameters,
         "oc_summary": oc_summary,
+        "spin_summary": spin_summary,
         "formula": "y(phi) = C + sum_k [a_k cos(2 pi k phi) + b_k sin(2 pi k phi)]",
         "oc_formula": oc_formula,
     }
@@ -2696,6 +3160,8 @@ def empty_analysis_result(
     has_error_column: bool = True,
     labels: dict[str, str] | None = None,
     harmonic_rows: list[dict[str, float | str | bool | None]] | None = None,
+    timing_status: dict[str, object] | None = None,
+    original_time: np.ndarray | None = None,
 ) -> dict:
     labels = labels or unit_labels("days")
     flux_is_magnitude = str((fields or {}).get("flux_is_magnitude", "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -2722,6 +3188,7 @@ def empty_analysis_result(
         "t0": float(t0 if t0 is not None else t[0]),
         "has_error_column": has_error_column,
         "flux_is_magnitude": flux_is_magnitude,
+        "barycentric_timing": timing_status or {},
         **labels,
         "excluded_periods": [],
         "exclusion_tolerance": None,
@@ -2745,6 +3212,7 @@ def empty_analysis_result(
             "window_power": win.tolist(),
             "residual_power": residual_power.tolist(),
             "time": t.tolist(),
+            "original_time": (t if original_time is None else original_time).tolist(),
             "flux": y.tolist(),
             "error": dy.tolist(),
             "prewhitening_model_flux": y.tolist(),
@@ -2802,11 +3270,26 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         fits_error_col=fits_error_col,
     )
     t, y, dy = apply_data_limits(t, y, dy, fields)
+    original_time = t.copy()
+    t, timing_status = barycentric_timing_status(
+        t,
+        fields,
+        file_bytes,
+        filename,
+        fits_extension,
+        fits_time_col,
+    )
     has_error_column = fits_error_col is not None if is_fits_upload(filename, file_bytes) else error_col is not None
     y_offset = weighted_median(y, 1.0 / dy**2)
     y_analysis = y - y_offset
     t0_raw = fields.get("t0", "").strip()
-    t0 = float(t0_raw) if t0_raw else float(t[0])
+    if t0_raw:
+        t0 = float(t0_raw)
+        if timing_status.get("correction_applied") and len(original_time):
+            correction_in_input_units = t - original_time
+            t0 += float(np.interp(t0, original_time, correction_in_input_units))
+    else:
+        t0 = float(t[0])
 
     freq = frequency_grid(t, fmin, fmax, samples_per_peak)
     power, ls, peaks = find_lomb_scargle_peaks(t, y_analysis, dy, freq, max_peaks, min_considered_period=min_considered_period)
@@ -2867,6 +3350,8 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             has_error_column=has_error_column,
             labels=labels,
             harmonic_rows=harmonic_rows,
+            timing_status=timing_status,
+            original_time=original_time,
         )
     primary = candidate_peaks[0]
     prewhiten_base_periods = prewhiten_periods
@@ -2957,6 +3442,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
         "t0": t0,
         "has_error_column": has_error_column,
         "flux_is_magnitude": flux_is_magnitude,
+        "barycentric_timing": timing_status,
         **labels,
         "excluded_periods": excluded_periods,
         "exclusion_tolerance": exclusion_tolerance,
@@ -2981,6 +3467,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
             "window_power": win.tolist(),
             "residual_power": residual_power.tolist(),
             "time": t.tolist(),
+            "original_time": original_time.tolist(),
             "flux": y.tolist(),
             "error": dy.tolist(),
             "prewhitening_model_flux": (prewhiten_model + y_offset).tolist(),
