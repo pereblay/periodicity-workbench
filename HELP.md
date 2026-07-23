@@ -4,6 +4,14 @@ Periodicity Workbench is an interactive tool for exploring periodic signals in u
 
 The tool is intentionally exploratory. It can help identify candidate periods, aliases, harmonics, sampling-window artefacts, time-dependent period changes, and simple phenomenological models. It should not be treated as a replacement for a final publication-grade physical solution. The results are best used as a guide for deciding what deserves a more careful analysis.
 
+Current application version: **1.6.0**.
+
+## Version 1.6 Highlights
+
+Version 1.6 adds timing-provenance checks and a substantial expansion of the X-ray pulse-timing laboratory. It can inspect FITS barycentric metadata, apply a clearly labelled geocentric approximation when possible, estimate epoch-folding significance and period uncertainty, derive candidate template TOAs, compare F0 and F0+F1 spin ephemerides, and explore circular or Keplerian Roemer-delay models. Pulsed fractions can include a supplied background and Monte Carlo intervals.
+
+PDF reports now include the 150-pixel VIU logo on every generated page and a ruled footer showing `12MAST AG2` and `Student name - Course`. Report metadata is taken directly from the visible report form to avoid stale student or course values.
+
 ## General Workflow
 
 1. Upload an ASCII numeric table or a FITS table.
@@ -80,10 +88,14 @@ When enabled, plots using the flux axis are displayed with an inverted vertical 
 Object name used to resolve sky coordinates through the SIMBAD/Sesame name resolver. The resolved ICRS coordinates are written into the RA and Dec fields and can be edited manually.
 
 **RA / Dec**
-Target coordinates in decimal degrees. They are recorded in the input summary and report metadata, but the app does not modify the uploaded time column from these coordinates.
+Target coordinates in decimal degrees. They are recorded in the input summary and are required when the automatic timing mode needs to apply an approximate geocentric-to-barycentric correction.
 
-**Time corrections**
-The app does not apply heliocentric or barycentric time corrections. A correct light-time correction requires the target coordinates and the observer location, or the spacecraft ephemeris for space missions. Because uploaded light curves often do not include that information, Periodicity Workbench leaves the time column unchanged.
+**Barycentric timing**
+Controls how the time reference is assessed. In automatic mode, FITS headers such as `TIMEREF`, `TIMESYS`, `TASSIGN`, `MJDREF`, and `PLEPHEM` are inspected. `TIMEREF=SOLARSYSTEM` is treated as confirmation that the selected times are already barycentric. A selected `BJD` column is also treated as barycentric.
+
+When barycentric provenance is not confirmed, the app attempts an approximate geocenter-to-Solar-System-barycenter correction if target coordinates and an absolute MJD/JD epoch are available. FITS `TIME` columns can be converted to an absolute epoch when `MJDREF` and the time unit are present. ASCII data can only be corrected automatically when its numerical time axis is recognizable as MJD or JD.
+
+The approximate correction does not use the spacecraft orbit. For a low-Earth-orbit satellite this can leave timing errors of up to roughly 25 ms, and mission-specific clock corrections may also be absent. Results produced under this approximation are therefore labelled demonstrative and must not be assigned a robust physical timing interpretation. Use **Already barycentric** when an ASCII file is known to contain corrected times, or **Keep input times** to disable correction while retaining the warning.
 
 **Bibliographic Search**
 After the object has been resolved with SIMBAD/Sesame, the Bibliographic Search button below the coordinates opens a temporary workspace view, similar to this help page, without clearing the current analysis state. It uses the resolved object name, prepares astronomy-literature searches for time-series, period, periodicity, timing, and variability terms, and displays an automatic arXiv result list when network access is available. The panel also provides a direct ADS query link, which should be used for the most complete astronomy bibliography.
@@ -674,6 +686,8 @@ chi2_epoch = sum_j [(mean_j - global_mean) / error_j]^2
 
 The best trial period is the one with the largest epoch-folding statistic.
 
+The app reports the number of degrees of freedom, a single-trial chi-square probability, a conservative trials-corrected false-alarm probability, and an empirical permutation false-alarm probability. Residual bootstrap realizations provide a Monte Carlo period interval. A maximum at the search boundary is flagged because the period range should then be widened.
+
 ### Pulse Profile Model
 
 The pulse profile is modeled as a Fourier series:
@@ -686,23 +700,23 @@ This allows broad, asymmetric, and multi-peaked pulse shapes.
 
 ### Pulsed Fraction
 
-The peak-to-peak pulsed fraction is estimated from the fitted profile:
+After subtracting the user-supplied background `B`, the peak-to-peak pulsed fraction is estimated from the fitted profile:
 
 ```text
-PF_peak_to_peak = (F_max - F_min) / (F_max + F_min)
+PF_peak_to_peak = (F_max - F_min) / (F_max + F_min - 2 B)
 ```
 
 The RMS pulsed fraction is approximated from Fourier amplitudes:
 
 ```text
-PF_rms = sqrt( sum_k (a_k^2 + b_k^2) / 2 ) / |C|
+PF_rms = sqrt( sum_k max[0, a_k^2 + b_k^2 - var(a_k) - var(b_k)] / 2 ) / (C - B)
 ```
 
-These definitions are most meaningful when the signal is a positive count rate or flux. They can be less physically meaningful for magnitudes or background-subtracted data near zero.
+Coefficient Monte Carlo draws provide 16th–84th percentile intervals. These definitions require a positive background-subtracted mean; otherwise the app suppresses the result and shows a warning.
 
 ### Pulse Arrival Times
 
-The data are divided into time segments. In each segment, the fitted pulse template is shifted in phase until it best matches the segment data. The phase shift gives an arrival-time offset:
+The data are divided into time segments. In each segment, a global, leave-one-segment-out, or highest-S/N template is shifted in phase until it best matches the segment data. A profile-likelihood scan supplies the shift uncertainty. The phase shift gives an arrival-time offset:
 
 ```text
 Delta t = Delta phase * P_pulse
@@ -714,7 +728,17 @@ The O-C value is then
 O-C = observed arrival time - calculated arrival time
 ```
 
-where the calculated arrival assumes a constant pulse period.
+The integer cycle nearest each segment centre defines the calculated arrival. The observed value is reported as a **candidate template phase-zero TOA**. This cycle assignment is an assumption, not proof of phase connection.
+
+### Spin Ephemeris
+
+Candidate TOAs are fitted with
+
+```text
+phi(t) = phi0 + F0 (t - Tref) + 0.5 F1 (t - Tref)^2
+```
+
+The app compares an `F0` model with `F0+F1` using BIC and reports residuals and a phase-connection diagnostic. Even a favourable diagnostic remains provisional until the integer cycle count and barycentric provenance are independently verified.
 
 ### Orbital Clues From O-C
 
@@ -731,7 +755,7 @@ The O-C amplitude is a proxy for
 a_x sin(i) / c
 ```
 
-where `a_x` is the compact object's projected orbital semimajor axis and `i` is inclination. In an eccentric orbit the O-C curve is not a pure sinusoid, and a Keplerian pulse-timing model is needed.
+where `a_x` is the compact object's projected orbital semimajor axis and `i` is inclination. The app can alternatively fit the Keplerian Roemer-delay form using orbital period, periastron epoch, eccentricity, longitude of periastron, and projected light-travel time. These fits operate on residuals after the spin ephemeris.
 
 ### Parameters
 
@@ -762,8 +786,20 @@ Number of time segments used for arrival-time estimation.
 **Min points per segment**
 Segments with fewer points are skipped.
 
-**O-C sinusoid period**
-Optional trial orbital period used to fit a sinusoid to the O-C values.
+**TOA template**
+Selects a global Fourier template, a leave-one-segment-out template that reduces self-matching bias, or a template from the highest-S/N segment.
+
+**Monte Carlo iterations**
+Controls period bootstrap, permutation significance, and pulsed-fraction uncertainty calculations. Zero disables Monte Carlo calculations.
+
+**Background level**
+Background subtracted when calculating pulsed fractions.
+
+**Test frequency derivative F1**
+Allows the quadratic spin term and retains it only when it improves BIC sufficiently.
+
+**O-C orbital model / trial orbital period**
+Selects no orbital fit, a circular delay, or a Keplerian delay. Local period fitting is constrained to the selected search width.
 
 **Pulse-shape fit method**
 Least-squares method used for the pulse-profile Fourier model.
@@ -822,6 +858,8 @@ Optional PDF file. If supplied, the newly generated report is appended after the
 Checkboxes controlling whether the report includes Frequency Search, Iterative Prewhitening, Period Tomography, and Model Laboratory sections. Empty or unavailable sections are skipped.
 
 The PDF report is a teaching/reporting aid. It preserves the main plots, fitted formulae, tables, and evidence text, but it should still be checked by the student before submission.
+
+Every generated page includes the VIU logo in the upper-right corner and a footer separated by a horizontal rule. The footer shows `12MAST AG2` on the left and `Student name - Course` on the right, using the report metadata fields.
 
 ## Interpreting Results Safely
 

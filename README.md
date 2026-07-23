@@ -2,7 +2,16 @@
 
 Streamlit version of the local Periodicity Workbench app.
 
-Current version: `1.4.0`.
+Current version: `1.6.0`.
+
+## What's New in 1.6
+
+- Barycentric-timing provenance checks for FITS files, with an explicitly labelled geocentric approximation when sufficient coordinates and absolute timing metadata are available.
+- Expanded X-ray pulse timing: epoch-folding significance, bootstrap period intervals, candidate template TOAs, F0/F1 spin ephemerides, phase-connection diagnostics, and circular or Keplerian Roemer-delay fits.
+- Background-aware peak-to-peak and noise-bias-corrected RMS pulsed fractions with Monte Carlo intervals.
+- Global, leave-one-segment-out, and highest-S/N pulse-template strategies with profile-likelihood timing errors.
+- Branded PDF reports with a 150-pixel VIU logo, reserved page margins, and a footer containing `12MAST AG2` plus `Student name - Course`.
+- Report metadata is passed directly from the visible form fields so the current student and course values are preserved in the generated PDF.
 
 It supports:
 
@@ -11,6 +20,7 @@ It supports:
 - Choosing the time, flux/count-rate/magnitude, and optional error columns.
 - Previewing the selected table rows and original light curve before running the analysis.
 - Resolving and recording target coordinates with SIMBAD/Sesame.
+- Inspecting FITS barycentric timing metadata and applying a clearly labelled geocentric approximation when possible.
 - Bibliographic lookups for the target object with time-series and periodicity search terms.
 - Weighted Lomb-Scargle periodograms.
 - Sampling-window inspection and tentative artefact classification.
@@ -21,12 +31,12 @@ It supports:
 - Orbital phase folding with user-selected `T0` and number of phase bins.
 - Folded-profile fitting with selected periods or harmonics, with maxima marked.
 - Period tomography through sliding Lomb-Scargle and WWZ-style maps.
-- A model laboratory for Fourier multi-harmonic profiles, eclipsing/eccentric binary toy models, Bondi-Hoyle wind-accretion toy models, and X-ray pulse-period timing.
+- A model laboratory for Fourier multi-harmonic profiles, eclipsing/eccentric binary toy models, Bondi-Hoyle wind-accretion toy models, and X-ray pulse timing with epoch-folding significance, candidate TOAs, F0/F1 spin ephemerides, background-aware pulsed fractions, and circular/Keplerian Roemer-delay fits.
 - A binary interpretation assistant for folded-profile minima, depth ratios, and half-period ambiguity checks.
 - Stellar spectral-type presets for toy binary and wind-accretion models, including OB and A/F/G/K/M representative stars.
 - Download buttons for the plotted data tables.
 - Evidence boxes for student notes and literature comparisons.
-- Compact PDF report generation with selectable sections and optional append-to-existing-PDF support.
+- Compact branded PDF report generation with selectable sections, per-page header/footer metadata, and optional append-to-existing-PDF support.
 
 ## Student Report Workflow
 

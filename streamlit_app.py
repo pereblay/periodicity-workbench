@@ -11,8 +11,10 @@ import xml.etree.ElementTree as ET
 
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
+from PIL import Image
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
@@ -24,13 +26,16 @@ except Exception:  # pragma: no cover - optional deployment dependency
     PdfReader = None
     PdfWriter = None
 
-from app import BHL_DONOR_PRESETS, advanced_time_frequency_map, bhl_donor_preset_values, binary_model_lab, bondi_hoyle_model_lab, fits_table_metadata, fourier_model_lab, is_fits_upload, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
+from app import BHL_DONOR_PRESETS, advanced_time_frequency_map, bhl_donor_preset_values, binary_model_lab, bondi_hoyle_model_lab, fits_table_metadata, fits_timing_metadata, fourier_model_lab, is_fits_upload, pulse_period_model_lab, read_columns, run_analysis, update_folded_profile, validate_upload
 
 
 try:
     APP_VERSION = (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip()
 except OSError:
-    APP_VERSION = "1.2.0"
+    APP_VERSION = "1.6.0"
+
+REPORT_LOGO_PATH = Path(__file__).resolve().parent / "static" / "report_logo.png"
+REPORT_LOGO_WIDTH_PX = 150
 
 
 st.set_page_config(
@@ -513,6 +518,17 @@ def render_fits_selector(prefix: str, file_bytes: bytes, filename: str) -> None:
         hide_index=True,
         height=180,
     )
+    timing_metadata = fits_timing_metadata(file_bytes, int(selected_extension), str(st.session_state[f"{prefix}_fits_time_col"]))
+    timing_rows = [
+        {"keyword": key.upper(), "value": timing_metadata.get(key)}
+        for key in ["timesys", "timeref", "tassign", "timeunit", "mjdref", "mjdrefi", "mjdreff", "plephem"]
+        if timing_metadata.get(key) is not None
+    ]
+    if timing_rows:
+        with st.expander("FITS timing metadata", expanded=False):
+            st.dataframe(pd.DataFrame(timing_rows), use_container_width=True, hide_index=True)
+    else:
+        st.warning("This FITS table does not expose standard barycentric timing keywords. Auto mode will attempt a geocentric approximation after coordinates are provided.")
 
 
 def suggested_frequency_range_from_bytes(file_bytes: bytes | None, time_column: int, time_unit: str = "days") -> tuple[float, float, str] | None:
@@ -1247,27 +1263,68 @@ def draw_table(fig: Figure, x: float, y: float, width: float, height: float, df:
 
 
 class CompactPdfReport:
-    def __init__(self, pdf: PdfPages) -> None:
+    def __init__(self, pdf: PdfPages, student: str = "", course: str = "") -> None:
         self.pdf = pdf
+        self.student = student or "Not provided"
+        self.course = course or "Not provided"
+        self.logo: np.ndarray | None = None
+        if REPORT_LOGO_PATH.exists():
+            with Image.open(REPORT_LOGO_PATH) as source:
+                source = source.convert("RGBA")
+                logo_height = max(1, round(source.height * REPORT_LOGO_WIDTH_PX / source.width))
+                resized = source.resize((REPORT_LOGO_WIDTH_PX, logo_height), Image.Resampling.LANCZOS)
+                self.logo = np.asarray(resized)
         self.fig: Figure | None = None
-        self.y = 0.95
+        self.y = 0.90
         self.page_has_content = False
         self.new_page()
 
-    def new_page(self) -> None:
+    def decorate_page(self) -> None:
+        assert self.fig is not None
+        if self.logo is not None:
+            page_width_px = int(round(self.fig.get_figwidth() * self.fig.dpi))
+            page_height_px = int(round(self.fig.get_figheight() * self.fig.dpi))
+            logo_height_px, logo_width_px = self.logo.shape[:2]
+            x_offset = page_width_px - logo_width_px - int(round(0.06 * page_width_px))
+            y_offset = page_height_px - logo_height_px - int(round(0.022 * page_height_px))
+            self.fig.figimage(self.logo, xo=x_offset, yo=y_offset, origin="upper", zorder=20)
+        self.fig.add_artist(
+            Line2D(
+                [0.06, 0.94],
+                [0.052, 0.052],
+                transform=self.fig.transFigure,
+                color="#70757d",
+                linewidth=0.65,
+            )
+        )
+        self.fig.text(0.06, 0.027, "12MAST AG2", fontsize=8, color="#30343a", ha="left", va="center")
+        self.fig.text(
+            0.94,
+            0.027,
+            f"{self.student} - {self.course}",
+            fontsize=8,
+            color="#30343a",
+            ha="right",
+            va="center",
+        )
+
+    def save_page(self) -> None:
         if self.fig is not None and self.page_has_content:
+            self.decorate_page()
             self.pdf.savefig(self.fig)
-        self.fig = Figure(figsize=(8.27, 11.69))
-        self.y = 0.95
+
+    def new_page(self) -> None:
+        self.save_page()
+        self.fig = Figure(figsize=(8.27, 11.69), dpi=100)
+        self.y = 0.90
         self.page_has_content = False
 
     def finish(self) -> None:
-        if self.fig is not None and self.page_has_content:
-            self.pdf.savefig(self.fig)
+        self.save_page()
 
     def block(self, title: str, height: float, drawer) -> None:
         height = min(height, 0.86)
-        if self.y - height < 0.06 and self.page_has_content:
+        if self.y - height < 0.085 and self.page_has_content:
             self.new_page()
         assert self.fig is not None
         top = self.y
@@ -1453,6 +1510,10 @@ def input_summary_frame(result: dict) -> pd.DataFrame:
         ("Flux range", "Not available" if len(flux) == 0 else f"{float(np.nanmin(flux)):.6g} - {float(np.nanmax(flux)):.6g}"),
         ("Error column", "yes" if result.get("has_error_column", True) else "no"),
     ]
+    timing = result.get("barycentric_timing", {})
+    if timing:
+        rows.append(("Barycentric timing", timing.get("status", "not assessed")))
+        rows.append(("Timing interpretation", "demonstrative only" if timing.get("demonstrative_only", True) else "barycentric provenance confirmed"))
     target_ra = str(fields.get("target_ra_deg", "")).strip()
     target_dec = str(fields.get("target_dec_deg", "")).strip()
     if target_ra and target_dec:
@@ -1702,22 +1763,43 @@ def model_lab_report_summary(model_result: dict, app_result: dict) -> str:
     elif family == "pulse":
         maxima = model_result.get("maxima", [])
         epoch_stat = summary.get("epoch_folding_statistic")
+        timing = app_result.get("barycentric_timing", {})
         lines.extend([
             "Model family: pulse-period analysis",
+            f"Barycentric timing: {timing.get('status', 'not assessed')}",
+            f"Physical timing interpretation: {'demonstrative only' if timing.get('demonstrative_only', True) else 'barycentric provenance confirmed'}",
             f"Best pulse period: {fmt_value(model_result.get('period'), 8)} {period_unit}",
             f"Input period guess: {fmt_value(model_result.get('period_guess'), 8)} {period_unit}",
             f"T0: {fmt_value(model_result.get('t0'), 6)} {time_unit}",
             f"Epoch-folding statistic: {fmt_value(epoch_stat)}",
+            f"Epoch-folding dof: {fmt_value(summary.get('epoch_folding_dof'))}",
+            f"Single-trial p-value: {fmt_value(summary.get('epoch_single_trial_p'))}",
+            f"Trials-corrected analytic FAP: {fmt_value(summary.get('epoch_trials_corrected_fap'))}",
+            f"Empirical search FAP: {fmt_value(summary.get('epoch_empirical_fap'))}",
+            f"Monte Carlo period uncertainty: {fmt_value(summary.get('period_error_mc'))} {period_unit}",
+            f"Period grid resolution: {fmt_value(summary.get('period_grid_resolution'))} {period_unit}; boundary maximum={summary.get('period_best_at_boundary')}",
             f"Pulse arrivals used: {int(summary.get('n_arrivals', 0))}",
-            f"Peak-to-peak pulsed fraction: {fmt_value(summary.get('peak_to_peak_pulsed_fraction'))}",
-            f"RMS pulsed fraction: {fmt_value(summary.get('rms_pulsed_fraction'))}",
+            f"Peak-to-peak pulsed fraction: {fmt_value(summary.get('peak_to_peak_pulsed_fraction'))} (MC 16-84% {fmt_value(summary.get('peak_to_peak_pulsed_fraction_p16'))}-{fmt_value(summary.get('peak_to_peak_pulsed_fraction_p84'))})",
+            f"Noise-bias-corrected RMS pulsed fraction: {fmt_value(summary.get('rms_pulsed_fraction'))} (MC 16-84% {fmt_value(summary.get('rms_pulsed_fraction_p16'))}-{fmt_value(summary.get('rms_pulsed_fraction_p84'))})",
+            f"Pulsed-fraction background: {fmt_value(summary.get('pulsed_fraction_background'))}",
+            f"TOA template: {summary.get('template_mode')}",
         ])
+        spin_summary = model_result.get("spin_summary", {})
+        if spin_summary:
+            lines.extend([
+                f"Spin model: {spin_summary.get('model')}",
+                f"F0: {fmt_value(spin_summary.get('frequency'), 9)} +/- {fmt_value(spin_summary.get('frequency_error'))} cycles/{time_unit}",
+                f"F1: {fmt_value(spin_summary.get('frequency_derivative'))} +/- {fmt_value(spin_summary.get('frequency_derivative_error'))} cycles/{time_unit}^2",
+                f"Spin residual RMS: {fmt_value(spin_summary.get('rms_time_residual'))} {time_unit}",
+                f"Phase connection: {spin_summary.get('phase_connection')}",
+            ])
         if maxima:
             lines.append(f"Main pulse maximum phase: {fmt_value(maxima[0].get('phase'))}")
         oc_summary = model_result.get("oc_summary", {})
         if oc_summary:
-            lines.append(f"O-C sinusoid period: {fmt_value(oc_summary.get('orbital_period'), 6)} {period_unit}")
-            lines.append(f"Projected a sin i proxy: {fmt_value(oc_summary.get('oc_amplitude_time'))} {time_unit}")
+            lines.append(f"Orbital timing model: {oc_summary.get('model')}; period={fmt_value(oc_summary.get('orbital_period'), 6)} {period_unit}")
+            lines.append(f"Projected light-travel time: {fmt_value(oc_summary.get('projected_light_travel_time'))} {time_unit}")
+        lines.append("TOA status: candidate template phase-zero times; integer cycle counts are assumed and not independently proven.")
         lines.append(f"Pedagogical hint: {model_lab_pedagogical_hint(model_result)}")
     else:
         lines.append("Model summary is not available for this model family.")
@@ -1737,14 +1819,14 @@ def append_pdf_report(previous_pdf: bytes, current_report_pdf: bytes) -> bytes:
     return buffer.getvalue()
 
 
-def build_periodicity_pdf_report(result: dict | None) -> bytes:
-    metadata = report_metadata()
+def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] | None = None) -> bytes:
+    metadata = metadata or report_metadata()
     sections = report_selected_sections()
     advanced = st.session_state.get("app_advanced_result")
     model_result = st.session_state.get("app_model_lab_result")
     buffer = io.BytesIO()
     with PdfPages(buffer) as pdf:
-        report = CompactPdfReport(pdf)
+        report = CompactPdfReport(pdf, student=metadata["student"], course=metadata["course"])
         title_lines = "\n".join([
             f"Object: {metadata['object'] or 'Not provided'}",
             f"Student: {metadata['student'] or 'Not provided'}",
@@ -2348,8 +2430,8 @@ def model_lab_pulse_epoch_plot(model_result: dict, app_result: dict) -> go.Figur
 
 def model_lab_pulse_oc_plot(model_result: dict, app_result: dict) -> go.Figure:
     arrivals = model_result.get("arrivals", [])
-    time = [row.get("time") for row in arrivals]
-    oc = [row.get("oc_time") for row in arrivals]
+    time = [row.get("arrival_time", row.get("time")) for row in arrivals]
+    oc = [row.get("spin_model_residual_time", row.get("oc_time")) for row in arrivals]
     err = [row.get("arrival_time_error") for row in arrivals]
     show_errors = bool(app_result.get("has_error_column", True)) and any(value is not None for value in err)
     fig = go.Figure()
@@ -2359,7 +2441,7 @@ def model_lab_pulse_oc_plot(model_result: dict, app_result: dict) -> go.Figure:
         error_y=dict(type="data", array=err, visible=show_errors),
         mode="markers",
         marker=dict(color="#20242a", size=7),
-        name="Pulse arrivals O-C",
+        name="Candidate TOA residuals",
         hovertemplate="Time=%{x:.6g}<br>O-C=%{y:.6g}<extra></extra>",
     ))
     if model_result.get("oc_model_time"):
@@ -2368,14 +2450,14 @@ def model_lab_pulse_oc_plot(model_result: dict, app_result: dict) -> go.Figure:
             y=model_result.get("oc_model", []),
             mode="lines",
             line=dict(color="#2457a6", width=2),
-            name="O-C sinusoid",
+            name=f"{str(model_result.get('oc_summary', {}).get('model', 'orbital')).title()} delay",
             hovertemplate="Time=%{x:.6g}<br>Model O-C=%{y:.6g}<extra></extra>",
         ))
     fig.add_hline(y=0.0, line_dash="dash", line_color="#777777", opacity=0.6)
     fig.update_layout(
-        title="Pulse arrival times",
+        title="Candidate TOAs after spin ephemeris",
         xaxis_title=app_result.get("time_label", "Time"),
-        yaxis_title=f"O-C [{app_result.get('baseline_unit', '')}]",
+        yaxis_title=f"Timing residual [{app_result.get('baseline_unit', '')}]",
         height=380,
         margin=dict(l=20, r=20, t=50, b=25),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
@@ -2440,6 +2522,7 @@ def fields_from_state(prefix: str, bootstrap_override: int | None = None) -> dic
         "target_name": str(st.session_state.get(f"{prefix}_target_name", "")).strip(),
         "target_ra_deg": str(st.session_state.get(f"{prefix}_target_ra_deg", "")).strip(),
         "target_dec_deg": str(st.session_state.get(f"{prefix}_target_dec_deg", "")).strip(),
+        "barycentric_mode": str(st.session_state.get(f"{prefix}_barycentric_mode", "auto")),
         "xmin": str(st.session_state.get(f"{prefix}_xmin", "")).strip(),
         "xmax": str(st.session_state.get(f"{prefix}_xmax", "")).strip(),
         "ymin": str(st.session_state.get(f"{prefix}_ymin", "")).strip(),
@@ -2560,6 +2643,17 @@ def input_controls(prefix: str, location=st) -> None:
     )
     option_cols[1].checkbox("Use error column", value=st.session_state.get(f"{prefix}_use_error", True), key=f"{prefix}_use_error")
     option_cols[2].checkbox("Flux is magnitude", value=st.session_state.get(f"{prefix}_flux_is_magnitude", False), key=f"{prefix}_flux_is_magnitude")
+    location.selectbox(
+        "Barycentric timing",
+        options=["auto", "already_barycentric", "uncorrected"],
+        format_func=lambda value: {
+            "auto": "Auto-detect; use geocentric approximation if needed",
+            "already_barycentric": "Already barycentric (user confirmed)",
+            "uncorrected": "Keep input times; mark as demonstrative",
+        }[value],
+        key=f"{prefix}_barycentric_mode",
+        help="Auto mode trusts standard FITS barycentric metadata. Otherwise it attempts an approximate geocenter-to-SSB correction when absolute times and coordinates are available.",
+    )
     location.caption("Target identification")
     target_cols = location.columns([0.62, 0.38])
     target_name = target_cols[0].text_input("Object name", key=f"{prefix}_target_name", placeholder="e.g. 4U 2206+54")
@@ -3004,12 +3098,43 @@ def model_lab_controls(prefix: str, location=st) -> None:
         cols = location.columns(2)
         cols[0].number_input("Pulse-arrival segments", min_value=2, max_value=80, value=st.session_state.get(f"{prefix}_model_lab_pulse_segments", 8), key=f"{prefix}_model_lab_pulse_segments")
         cols[1].number_input("Min points per segment", min_value=4, max_value=500, value=st.session_state.get(f"{prefix}_model_lab_pulse_min_points", 20), key=f"{prefix}_model_lab_pulse_min_points")
+        cols = location.columns(2)
+        cols[0].selectbox(
+            "TOA template",
+            ["global_fourier", "leave_one_out", "highest_snr_segment"],
+            format_func=lambda value: {"global_fourier": "Global Fourier", "leave_one_out": "Leave-one-segment-out", "highest_snr_segment": "Highest-S/N segment"}[value],
+            key=f"{prefix}_model_lab_pulse_template_mode",
+        )
+        cols[1].number_input("Monte Carlo iterations", min_value=0, max_value=500, value=st.session_state.get(f"{prefix}_model_lab_pulse_mc_iterations", 100), step=25, key=f"{prefix}_model_lab_pulse_mc_iterations")
+        cols = location.columns(2)
+        cols[0].text_input(
+            "Background level",
+            value=st.session_state.get(f"{prefix}_model_lab_pulse_background", "0"),
+            key=f"{prefix}_model_lab_pulse_background",
+            help="Subtracted from the fitted mean when calculating pulsed fractions.",
+        )
+        cols[1].checkbox("Test frequency derivative F1", value=st.session_state.get(f"{prefix}_model_lab_pulse_fit_frequency_derivative", True), key=f"{prefix}_model_lab_pulse_fit_frequency_derivative")
+        location.caption("Candidate TOAs assume the integer cycle count nearest each segment centre; inspect the phase-connection diagnostic before physical interpretation.")
+        orbital_model = location.selectbox(
+            "O-C orbital model",
+            ["none", "circular", "keplerian"],
+            format_func=lambda value: {"none": "None", "circular": "Circular Roemer delay", "keplerian": "Keplerian Roemer delay"}[value],
+            key=f"{prefix}_model_lab_pulse_orbital_model",
+        )
         location.text_input(
-            f"O-C sinusoid period [{period_unit}]",
+            f"Trial orbital period [{period_unit}]",
             value=st.session_state.get(f"{prefix}_model_lab_pulse_orbital_period", ""),
             key=f"{prefix}_model_lab_pulse_orbital_period",
-            placeholder="optional orbital trial period",
+            placeholder="required when an orbital model is selected",
         )
+        if orbital_model != "none":
+            cols = location.columns(2)
+            cols[0].checkbox("Fit orbital period locally", value=st.session_state.get(f"{prefix}_model_lab_pulse_orbital_fit_period", False), key=f"{prefix}_model_lab_pulse_orbital_fit_period")
+            cols[1].number_input("Orbital search half-width [%]", min_value=0.1, max_value=90.0, value=st.session_state.get(f"{prefix}_model_lab_pulse_orbital_period_width", 20.0), step=1.0, key=f"{prefix}_model_lab_pulse_orbital_period_width")
+        if orbital_model == "keplerian":
+            cols = location.columns(2)
+            cols[0].number_input("Initial eccentricity", min_value=0.0, max_value=0.9, value=st.session_state.get(f"{prefix}_model_lab_pulse_orbital_eccentricity", 0.1), step=0.05, key=f"{prefix}_model_lab_pulse_orbital_eccentricity")
+            cols[1].number_input("Initial omega [deg]", min_value=-360.0, max_value=360.0, value=st.session_state.get(f"{prefix}_model_lab_pulse_orbital_omega", 0.0), step=5.0, key=f"{prefix}_model_lab_pulse_orbital_omega")
         fit_options = ["standard", "robust", "display-optimized"]
         global_fit = st.session_state.get(f"{prefix}_model_fit_method", "standard")
         if global_fit not in fit_options:
@@ -3040,7 +3165,16 @@ def model_lab_controls(prefix: str, location=st) -> None:
                 "model_lab_pulse_epoch_bins": str(st.session_state.get(f"{prefix}_model_lab_pulse_epoch_bins", 16)),
                 "model_lab_pulse_segments": str(st.session_state.get(f"{prefix}_model_lab_pulse_segments", 8)),
                 "model_lab_pulse_min_points": str(st.session_state.get(f"{prefix}_model_lab_pulse_min_points", 20)),
+                "model_lab_pulse_template_mode": st.session_state.get(f"{prefix}_model_lab_pulse_template_mode", "global_fourier"),
+                "model_lab_pulse_mc_iterations": str(st.session_state.get(f"{prefix}_model_lab_pulse_mc_iterations", 100)),
+                "model_lab_pulse_background": str(st.session_state.get(f"{prefix}_model_lab_pulse_background", "0")).strip(),
+                "model_lab_pulse_fit_frequency_derivative": str(st.session_state.get(f"{prefix}_model_lab_pulse_fit_frequency_derivative", True)),
+                "model_lab_pulse_orbital_model": st.session_state.get(f"{prefix}_model_lab_pulse_orbital_model", "none"),
                 "model_lab_pulse_orbital_period": str(st.session_state.get(f"{prefix}_model_lab_pulse_orbital_period", "")).strip(),
+                "model_lab_pulse_orbital_fit_period": str(st.session_state.get(f"{prefix}_model_lab_pulse_orbital_fit_period", False)),
+                "model_lab_pulse_orbital_period_width": str(st.session_state.get(f"{prefix}_model_lab_pulse_orbital_period_width", 20.0)),
+                "model_lab_pulse_orbital_eccentricity": str(st.session_state.get(f"{prefix}_model_lab_pulse_orbital_eccentricity", 0.1)),
+                "model_lab_pulse_orbital_omega": str(st.session_state.get(f"{prefix}_model_lab_pulse_orbital_omega", 0.0)),
                 "model_lab_pulse_fit_method": st.session_state.get(f"{prefix}_model_lab_pulse_fit_method", global_fit),
             })
             with st.spinner("Running pulse period analysis..."):
@@ -3399,14 +3533,20 @@ def model_lab_controls(prefix: str, location=st) -> None:
 
 def report_controls(prefix: str, location=st) -> None:
     result = st.session_state.get("app_result")
-    location.text_input("Object name", key="report_object_name")
-    location.text_input("Student name", key="report_student_name")
-    location.text_input("Course", key="report_course")
-    location.text_input(
+    report_object = location.text_input("Object name", key="report_object_name")
+    report_student = location.text_input("Student name", key="report_student_name")
+    report_course = location.text_input("Course", key="report_course")
+    report_output_name = location.text_input(
         "Output PDF file name",
         key="report_output_name",
         value=st.session_state.get("report_output_name", "periodicity_workbench_report.pdf"),
     )
+    current_metadata = {
+        "object": str(report_object).strip(),
+        "student": str(report_student).strip(),
+        "course": str(report_course).strip(),
+        "filename": pdf_file_name(str(report_output_name)),
+    }
     previous_report_pdf = location.file_uploader(
         "Previous PDF report",
         type=["pdf"],
@@ -3424,7 +3564,7 @@ def report_controls(prefix: str, location=st) -> None:
         location.info("Run an analysis before generating a report.")
         return
     try:
-        pdf_report = build_periodicity_pdf_report(result)
+        pdf_report = build_periodicity_pdf_report(result, metadata=current_metadata)
         pdf_download = pdf_report
         button_label = "Generate PDF report"
         if previous_report_pdf is not None:
@@ -3433,7 +3573,7 @@ def report_controls(prefix: str, location=st) -> None:
         location.download_button(
             button_label,
             data=pdf_download,
-            file_name=report_metadata()["filename"],
+            file_name=current_metadata["filename"],
             mime="application/pdf",
             type="primary",
             use_container_width=True,
@@ -3441,6 +3581,19 @@ def report_controls(prefix: str, location=st) -> None:
         )
     except Exception as exc:
         location.error(f"Could not build the PDF report: {exc}")
+
+
+def render_barycentric_status(result: dict, pulse_context: bool = False) -> None:
+    timing = result.get("barycentric_timing", {})
+    if not timing:
+        st.warning("Barycentric timing provenance is unavailable. Timing results are demonstrative only.")
+        return
+    message = str(timing.get("message", timing.get("status", "Timing provenance unavailable")))
+    if timing.get("confirmed_barycentric"):
+        if not pulse_context:
+            st.success(message)
+        return
+    st.warning(message)
 
 
 def render_search_outputs(result: dict | None) -> None:
@@ -3457,6 +3610,7 @@ def render_search_outputs(result: dict | None) -> None:
     primary = result.get("primary_period")
     metric_cols[2].metric("Primary period", "" if primary is None else f"{float(primary):.6g} {period_unit}")
     metric_cols[3].metric("T0", f"{float(result.get('t0', 0.0)):.4f}")
+    render_barycentric_status(result)
     cols = st.columns(3)
     cols[0].plotly_chart(periodogram(result, "power", "peaks", "Lomb-Scargle periodogram"), use_container_width=True)
     cols[1].plotly_chart(window_plot(result), use_container_width=True)
@@ -3707,16 +3861,31 @@ def render_pulse_highlight(model_result: dict, app_result: dict) -> None:
         f"<strong>Pulse arrivals used:</strong> {int(summary.get('n_arrivals', 0))}",
     ]
     if summary.get("peak_to_peak_pulsed_fraction") is not None:
-        lines.append(f"<strong>Peak-to-peak pulsed fraction:</strong> {float(summary['peak_to_peak_pulsed_fraction']):.5g}")
+        interval = ""
+        if summary.get("peak_to_peak_pulsed_fraction_p16") is not None:
+            interval = f" (MC 16-84%: {float(summary['peak_to_peak_pulsed_fraction_p16']):.4g}-{float(summary['peak_to_peak_pulsed_fraction_p84']):.4g})"
+        lines.append(f"<strong>Peak-to-peak pulsed fraction:</strong> {float(summary['peak_to_peak_pulsed_fraction']):.5g}{interval}")
     if summary.get("rms_pulsed_fraction") is not None:
         lines.append(f"<strong>RMS pulsed fraction:</strong> {float(summary['rms_pulsed_fraction']):.5g}")
     if maxima:
         lines.append(f"<strong>Main pulse maximum phase:</strong> {float(maxima[0].get('phase', 0.0)):.5g}")
+    if summary.get("period_error_mc") is not None:
+        lines.append(f"<strong>Monte Carlo period uncertainty:</strong> {float(summary['period_error_mc']):.4g} {period_unit}")
+    if summary.get("epoch_empirical_fap") is not None:
+        lines.append(f"<strong>Empirical search FAP:</strong> {float(summary['epoch_empirical_fap']):.4g}")
+    spin_summary = model_result.get("spin_summary", {})
+    if spin_summary:
+        lines.append(f"<strong>Spin ephemeris:</strong> {spin_summary.get('model')} — {spin_summary.get('phase_connection')}")
+        lines.append(f"<strong>F0:</strong> {float(spin_summary.get('frequency', 0.0)):.8g} cycles/{time_unit}")
+        if spin_summary.get("model") == "F0+F1":
+            lines.append(f"<strong>F1:</strong> {float(spin_summary.get('frequency_derivative', 0.0)):.5g} cycles/{time_unit}<sup>2</sup>")
     oc_summary = model_result.get("oc_summary", {})
     if oc_summary:
-        lines.append(f"<strong>O-C sinusoid period:</strong> {float(oc_summary.get('orbital_period', 0.0)):.6g} {period_unit}")
-        lines.append(f"<strong>Projected a sin i proxy:</strong> {float(oc_summary.get('oc_amplitude_time', 0.0)):.5g} {time_unit}")
-    lines.append("<strong>Pedagogical hint:</strong> epoch folding refines the pulse period, the profile fit estimates pulse shape and pulsed fraction, and O-C trends can flag Doppler delays before attempting a physical orbital timing solution.")
+        lines.append(f"<strong>Orbital timing model:</strong> {oc_summary.get('model')} at P={float(oc_summary.get('orbital_period', 0.0)):.6g} {period_unit}")
+        lines.append(f"<strong>Projected light-travel time:</strong> {float(oc_summary.get('projected_light_travel_time', 0.0)):.5g} {time_unit}")
+    if summary.get("pulsed_fraction_warning"):
+        lines.append(f"<strong>Warning:</strong> {summary.get('pulsed_fraction_warning')}")
+    lines.append("<strong>Interpretation:</strong> reported TOAs are candidate template phase-zero times. Integer cycle counts are assumed and must be independently validated before a physical timing solution is claimed.")
     st.markdown(
         """
         <div style="border: 1px solid #b8bfd4; background: #f6f7fb; padding: 0.85rem 1rem; border-radius: 0.45rem; margin: 0.35rem 0 1rem 0;">
@@ -3830,6 +3999,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
         prefix_name = "bondi_hoyle"
     elif model_result.get("family") == "pulse":
+        render_barycentric_status(result, pulse_context=True)
         st.plotly_chart(model_lab_pulse_profile_plot(model_result, result), use_container_width=True)
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
@@ -3855,16 +4025,19 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Pulse-shape terms")
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), use_container_width=True, hide_index=True)
             if model_result.get("oc_formula"):
-                st.caption("Pulse-arrival O-C formula")
+                st.caption("Orbital Roemer-delay formula")
                 st.code(str(model_result.get("oc_formula", "")), language="text")
-                st.caption("O-C sinusoid parameters")
+                st.caption("Orbital timing parameters")
                 st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("oc_parameters", []))), use_container_width=True, hide_index=True)
         with cols[1]:
             st.caption("Global pulse fit summary")
             st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
+            if model_result.get("spin_summary"):
+                st.caption("Spin ephemeris (candidate phase connection)")
+                st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("spin_summary", {})])), use_container_width=True, hide_index=True)
             st.caption("Pulse maxima")
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
-            st.caption("Pulse arrival times")
+            st.caption("Candidate template phase-zero TOAs")
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("arrivals", []))), use_container_width=True, hide_index=True)
         dl_extra_cols = st.columns(2)
         with dl_extra_cols[0]:
@@ -3873,6 +4046,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
                 pd.DataFrame({
                     "trial_period": model_result.get("trial_period", []),
                     "epoch_folding_statistic": model_result.get("epoch_power", []),
+                    "degrees_of_freedom": model_result.get("epoch_dof", []),
                 }),
                 "pulse_epoch_folding_search.txt",
                 "app_download_pulse_epoch_search",
