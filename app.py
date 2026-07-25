@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".matplotlib"))
 
 import matplotlib
@@ -33,6 +33,13 @@ from astropy.utils import iers
 from scipy.optimize import least_squares, minimize_scalar
 from scipy.signal import find_peaks
 from scipy.stats import chi2 as chi2_distribution
+
+from bhl import (
+    bhl_accretion_state,
+    bhl_validity_warnings,
+    periodic_response,
+    physical_bhl_outputs,
+)
 
 iers.conf.auto_download = False
 
@@ -2145,21 +2152,86 @@ def bondi_hoyle_proxy(
     wind_speed_ratio: float,
     wind_beta: float,
     donor_radius_over_a: float = 0.15,
+    sound_speed_ratio: float = 0.0,
+    formulation: str = "classical",
+    compact_mass_fraction: float = 0.1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    eccentricity = float(np.clip(eccentricity, 0.0, 0.9))
-    wind_speed_ratio = max(float(wind_speed_ratio), 0.05)
-    wind_beta = max(float(wind_beta), 0.0)
-    donor_radius_over_a = float(np.clip(donor_radius_over_a, 0.001, 0.95))
-    true_anomaly = true_anomaly_from_phase(phase, eccentricity)
-    separation = (1.0 - eccentricity**2) / (1.0 + eccentricity * np.cos(true_anomaly))
-    separation = np.maximum(separation, 1e-4)
-    orbital_speed2 = np.maximum(2.0 / separation - 1.0, 1e-4)
-    wind_speed = wind_speed_ratio * np.maximum(1.0 - donor_radius_over_a / separation, 0.05) ** wind_beta
-    relative_speed2 = wind_speed**2 + orbital_speed2
-    density = 1.0 / (separation**2 * np.maximum(wind_speed, 1e-4))
-    proxy = density / np.maximum(relative_speed2, 1e-8) ** 1.5
-    proxy = proxy / np.nanmedian(proxy) - 1.0
-    return proxy, separation, true_anomaly
+    state = bhl_accretion_state(
+        phase,
+        float(np.clip(eccentricity, 0.0, 0.9)),
+        max(float(wind_speed_ratio), 0.05),
+        max(float(wind_beta), 0.0),
+        float(donor_radius_over_a),
+        sound_speed_ratio=max(float(sound_speed_ratio), 0.0),
+        compact_mass_fraction=float(np.clip(compact_mass_fraction, 1e-4, 1.0 - 1e-4)),
+        formulation=formulation,
+    )
+    return (
+        np.asarray(state["proxy"], dtype=float),
+        np.asarray(state["separation"], dtype=float),
+        np.asarray(state["true_anomaly"], dtype=float),
+    )
+
+
+def bhl_observable_proxy(
+    phase: np.ndarray,
+    eccentricity: float,
+    wind_speed_ratio: float,
+    wind_beta: float,
+    donor_radius_over_a: float,
+    *,
+    sound_speed_ratio: float,
+    formulation: str,
+    compact_mass_fraction: float,
+    attenuation_tau: float,
+    response_mode: str,
+    response_delay_phase: float,
+    response_timescale_phase: float,
+) -> tuple[np.ndarray, dict[str, np.ndarray | str]]:
+    """Return the observable proxy while retaining intrinsic orbital state."""
+    requested_phase = np.asarray(phase, dtype=float) % 1.0
+
+    def evaluate(sample_phase: np.ndarray) -> tuple[np.ndarray, dict[str, np.ndarray | str]]:
+        sample_state = bhl_accretion_state(
+            sample_phase,
+            eccentricity,
+            wind_speed_ratio,
+            wind_beta,
+            donor_radius_over_a,
+            sound_speed_ratio=sound_speed_ratio,
+            compact_mass_fraction=compact_mass_fraction,
+            formulation=formulation,
+        )
+        intrinsic = np.asarray(sample_state["raw_proxy"], dtype=float)
+        column = np.asarray(sample_state["column_shape"], dtype=float)
+        column_ratio = column / max(float(np.nanmedian(column)), 1e-12)
+        attenuated = intrinsic * np.exp(-max(float(attenuation_tau), 0.0) * column_ratio)
+        sample_state["intrinsic_proxy"] = intrinsic / max(float(np.nanmedian(intrinsic)), 1e-12) - 1.0
+        sample_state["column_ratio"] = column_ratio
+        sample_state["attenuation"] = np.exp(-max(float(attenuation_tau), 0.0) * column_ratio)
+        sample_state["attenuated_raw"] = attenuated
+        return attenuated, sample_state
+
+    response_mode = str(response_mode).strip().lower()
+    if response_mode == "none":
+        transferred, state = evaluate(requested_phase)
+    else:
+        grid = np.linspace(0.0, 1.0, 4096, endpoint=False)
+        grid_signal, _ = evaluate(grid)
+        grid_transferred = periodic_response(
+            grid,
+            grid_signal,
+            mode=response_mode,
+            delay_phase=response_delay_phase,
+            timescale_phase=response_timescale_phase,
+        )
+        extended_grid = np.concatenate([grid - 1.0, grid, grid + 1.0])
+        transferred = np.interp(requested_phase, extended_grid, np.tile(grid_transferred, 3))
+        _, state = evaluate(requested_phase)
+    median = max(float(np.nanmedian(transferred)), 1e-12)
+    observable = transferred / median - 1.0
+    state["observable_proxy"] = observable
+    return observable, state
 
 
 def fit_bondi_hoyle_model(
@@ -2173,26 +2245,36 @@ def fit_bondi_hoyle_model(
     wind_beta: float,
     donor_radius_over_a: float,
     include_phase_lag: bool,
+    *,
+    sound_speed_ratio: float = 0.0,
+    formulation: str = "classical",
+    compact_mass_fraction: float = 0.1,
+    attenuation_tau: float = 0.0,
+    response_mode: str = "none",
+    response_timescale_phase: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, float | str]]:
     weights = safe_weights(dy, "standard")
     sqrt_weights = np.sqrt(weights)
-    eccentricity_guess = float(np.clip(eccentricity_guess, 0.0, 0.9))
+    donor_radius_over_a = max(float(donor_radius_over_a), 0.001)
+    eccentricity_upper = min(0.9, 1.0 - donor_radius_over_a - 1e-4)
+    if eccentricity_upper <= 0.0:
+        raise ValueError("Donor radius / a leaves no valid eccentric orbit")
+    eccentricity_guess = float(np.clip(eccentricity_guess, 0.0, eccentricity_upper))
     wind_speed_guess = max(float(wind_speed_guess), 0.05)
-    donor_radius_over_a = float(np.clip(donor_radius_over_a, 0.001, 0.95))
-    phase_lag_guess = 0.0
+    response_delay_guess = 0.0
 
     variable0 = []
     lower, upper = [], []
     if fit_eccentricity:
         variable0.append(eccentricity_guess)
         lower.append(0.0)
-        upper.append(0.9)
+        upper.append(eccentricity_upper)
     if fit_wind_speed:
         variable0.append(wind_speed_guess)
         lower.append(0.05)
         upper.append(20.0)
     if include_phase_lag:
-        variable0.append(phase_lag_guess)
+        variable0.append(response_delay_guess)
         lower.append(-0.25)
         upper.append(0.25)
 
@@ -2200,7 +2282,7 @@ def fit_bondi_hoyle_model(
         idx = 0
         eccentricity = eccentricity_guess
         wind_speed_ratio = wind_speed_guess
-        phase_lag = 0.0
+        response_delay = 0.0
         if fit_eccentricity:
             eccentricity = float(variable_params[idx])
             idx += 1
@@ -2208,16 +2290,28 @@ def fit_bondi_hoyle_model(
             wind_speed_ratio = float(variable_params[idx])
             idx += 1
         if include_phase_lag:
-            phase_lag = float(variable_params[idx])
-        return eccentricity, wind_speed_ratio, phase_lag
+            response_delay = float(variable_params[idx])
+        return eccentricity, wind_speed_ratio, response_delay
 
     def linear_model_for(variable_params: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float, float]:
-        eccentricity, wind_speed_ratio, phase_lag = unpack(variable_params)
-        shifted_phase = (phase - phase_lag) % 1.0
-        proxy, _, _ = bondi_hoyle_proxy(shifted_phase, eccentricity, wind_speed_ratio, wind_beta, donor_radius_over_a)
+        eccentricity, wind_speed_ratio, response_delay = unpack(variable_params)
+        proxy, _ = bhl_observable_proxy(
+            phase,
+            eccentricity,
+            wind_speed_ratio,
+            wind_beta,
+            donor_radius_over_a,
+            sound_speed_ratio=sound_speed_ratio,
+            formulation=formulation,
+            compact_mass_fraction=compact_mass_fraction,
+            attenuation_tau=attenuation_tau,
+            response_mode=response_mode,
+            response_delay_phase=response_delay,
+            response_timescale_phase=response_timescale_phase,
+        )
         design = np.column_stack([np.ones_like(proxy), proxy])
         coeff, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], y * sqrt_weights, rcond=None)
-        return design @ coeff, coeff, eccentricity, wind_speed_ratio, phase_lag
+        return design @ coeff, coeff, eccentricity, wind_speed_ratio, response_delay
 
     if variable0:
         optimized = least_squares(
@@ -2228,24 +2322,81 @@ def fit_bondi_hoyle_model(
             max_nfev=3000,
         )
         variables = optimized.x
+        jacobian = np.asarray(optimized.jac, dtype=float)
     else:
         variables = np.asarray([], dtype=float)
-    model, coeff, eccentricity, wind_speed_ratio, phase_lag = linear_model_for(variables)
+        jacobian = np.empty((len(y), 0), dtype=float)
+    model, coeff, eccentricity, wind_speed_ratio, response_delay = linear_model_for(variables)
     residuals = y - model
     dof = max(1, len(y) - (2 + len(variables)))
+    nonlinear_names = []
+    if fit_eccentricity:
+        nonlinear_names.append("eccentricity")
+    if fit_wind_speed:
+        nonlinear_names.append("wind_terminal_ratio")
+    if include_phase_lag:
+        nonlinear_names.append("response_delay_phase")
+    best_proxy, _ = bhl_observable_proxy(
+        phase,
+        eccentricity,
+        wind_speed_ratio,
+        wind_beta,
+        donor_radius_over_a,
+        sound_speed_ratio=sound_speed_ratio,
+        formulation=formulation,
+        compact_mass_fraction=compact_mass_fraction,
+        attenuation_tau=attenuation_tau,
+        response_mode=response_mode,
+        response_delay_phase=response_delay,
+        response_timescale_phase=response_timescale_phase,
+    )
+    best_design = np.column_stack([np.ones_like(best_proxy), best_proxy])
+    linear_covariance = np.linalg.pinv(best_design.T @ (best_design * weights[:, None]))
+    linear_covariance *= max(1.0, float(np.sum(weights * residuals**2) / dof))
+    linear_errors = np.sqrt(np.maximum(np.diag(linear_covariance), 0.0))
+    parameter_errors: dict[str, float] = {
+        "offset": float(linear_errors[0]),
+        "bhl_scale": float(linear_errors[1]),
+    }
+    correlation_matrix: list[list[float]] = []
+    if len(variables) and jacobian.shape[1] == len(variables):
+        covariance = np.linalg.pinv(jacobian.T @ jacobian)
+        covariance *= max(1.0, float(np.sum((residuals * sqrt_weights) ** 2) / dof))
+        errors = np.sqrt(np.maximum(np.diag(covariance), 0.0))
+        parameter_errors.update({name: float(error) for name, error in zip(nonlinear_names, errors)})
+        denominator = np.outer(errors, errors)
+        correlation = np.divide(covariance, denominator, out=np.zeros_like(covariance), where=denominator > 0.0)
+        correlation_matrix = correlation.tolist()
+    bounds_hit = [
+        name
+        for name, value, low, high in zip(nonlinear_names, variables, lower, upper)
+        if abs(value - low) <= 1e-4 * max(1.0, abs(low))
+        or abs(value - high) <= 1e-4 * max(1.0, abs(high))
+    ]
     summary: dict[str, float | str] = {
-        "method": "bondi_hoyle_toy",
+        "method": "bondi_hoyle",
         "offset": float(coeff[0]),
         "scale": float(coeff[1]),
         "eccentricity": eccentricity,
         "wind_speed_ratio": wind_speed_ratio,
+        "wind_terminal_ratio": wind_speed_ratio,
         "wind_beta": wind_beta,
         "donor_radius_over_a": donor_radius_over_a,
-        "phase_lag": phase_lag,
+        "phase_lag": response_delay,
+        "response_delay_phase": response_delay,
+        "response_mode": response_mode,
+        "response_timescale_phase": response_timescale_phase,
+        "formulation": formulation,
+        "sound_speed_ratio": sound_speed_ratio,
+        "attenuation_tau": attenuation_tau,
         "rms": float(np.sqrt(np.mean(residuals**2))) if len(residuals) else None,
         "weighted_rms": float(np.sqrt(np.average(residuals**2, weights=weights))) if len(residuals) else None,
         "chi2_red": float(np.sum(weights * residuals**2) / dof) if len(residuals) else None,
         "n_points": int(len(y)),
+        "nonlinear_parameter_names": nonlinear_names,
+        "parameter_errors": parameter_errors,
+        "correlation_matrix": correlation_matrix,
+        "bounds_hit": bounds_hit,
     }
     return model, coeff, summary
 
@@ -2274,6 +2425,7 @@ def physical_wind_to_ratio(
     donor_radius_over_a = donor_radius_m / semi_major_axis_m
     return {
         "wind_speed_ratio": float(wind_speed_ratio),
+        "wind_terminal_ratio": float(wind_speed_ratio),
         "v_inf_km_s": float(v_inf_km_s),
         "donor_mass_msun": float(donor_mass_msun),
         "compact_mass_msun": float(compact_mass_msun),
@@ -2281,7 +2433,10 @@ def physical_wind_to_ratio(
         "donor_radius_rsun": float(donor_radius_rsun),
         "donor_radius_over_a": float(donor_radius_over_a),
         "semi_major_axis_rsun": float(semi_major_axis_m / R_SUN_SI),
+        "semi_major_axis_m": float(semi_major_axis_m),
+        "period_seconds": float(period_seconds),
         "orbital_speed_km_s": float(orbital_speed_m_s / 1000.0),
+        "orbital_speed_m_s": float(orbital_speed_m_s),
         "periastron_distance_rsun": float(periastron_m / R_SUN_SI),
         "radius_periastron_fraction": float(donor_radius_m / periastron_m) if periastron_m > 0.0 else float("nan"),
     }
@@ -2299,52 +2454,73 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
 
     period_raw = str(fields.get("model_lab_bh_period", fields.get("model_lab_period", ""))).strip()
     default_period = result.get("folded_period") or result.get("primary_period")
-    if period_raw:
-        period = float(period_raw)
-    elif default_period is not None:
-        period = float(default_period)
-    else:
-        raise ValueError("Choose a Bondi-Hoyle orbital period or run an analysis with a primary period")
+    period = float(period_raw) if period_raw else float(default_period) if default_period is not None else float("nan")
     if not np.isfinite(period) or period <= 0.0:
-        raise ValueError("Bondi-Hoyle period must be positive")
+        raise ValueError("Choose a positive Bondi-Hoyle orbital period")
     t0_raw = str(fields.get("model_lab_bh_t0", fields.get("model_lab_t0", ""))).strip()
     t0 = float(t0_raw) if t0_raw else float(result.get("t0", t[0]))
     n_bins = max(4, int(fields.get("model_lab_bh_bins", fields.get("fold_bins", "24"))))
     eccentricity_guess = float(fields.get("model_lab_bh_eccentricity", "0.3"))
     wind_input_mode = fields.get("model_lab_bh_wind_input_mode", "ratio").strip().lower()
-    physical_wind: dict[str, float] = {}
+    normalization_mode = fields.get("model_lab_bh_normalization_mode", "normalized").strip().lower()
+    formulation = fields.get("model_lab_bh_formulation", "classical").strip().lower()
+    response_mode = fields.get("model_lab_bh_response_mode", "none").strip().lower()
+    response_timescale = max(float(fields.get("model_lab_bh_response_timescale", "0.05")), 0.0)
+    attenuation_tau = max(float(fields.get("model_lab_bh_attenuation_tau", "0.0")), 0.0)
+
     donor_spectral_type = fields.get("model_lab_bh_donor_spectral_type", "Manual").strip()
     donor_luminosity_class = fields.get("model_lab_bh_donor_luminosity_class", "V").strip()
     donor_mass_msun = float(fields.get("model_lab_bh_donor_mass", "18.0"))
+    compact_mass_msun = float(fields.get("model_lab_bh_compact_mass", "1.4"))
     donor_radius_rsun = float(fields.get("model_lab_bh_donor_radius", "8.0"))
     preset_values = bhl_donor_preset_values(donor_spectral_type, donor_luminosity_class)
     if preset_values is not None:
         donor_mass_msun = float(preset_values["mass_msun"])
         donor_radius_rsun = float(preset_values["radius_rsun"])
+    if donor_mass_msun <= 0.0 or compact_mass_msun <= 0.0:
+        raise ValueError("Donor and compact-object masses must be positive")
+    compact_mass_fraction = compact_mass_msun / (donor_mass_msun + compact_mass_msun)
+
+    physical_wind: dict[str, float] = {}
     if wind_input_mode in {"v_inf", "vinf", "physical"}:
+        wind_input_mode = "v_inf"
         physical_wind = physical_wind_to_ratio(
             period,
             result.get("baseline_unit", result.get("period_unit", "d")),
             eccentricity_guess,
             float(fields.get("model_lab_bh_vinf", "1000.0")),
             donor_mass_msun,
-            float(fields.get("model_lab_bh_compact_mass", "1.4")),
+            compact_mass_msun,
             donor_radius_rsun,
         )
-        wind_speed_guess = physical_wind["wind_speed_ratio"]
+        wind_speed_guess = physical_wind["wind_terminal_ratio"]
         donor_radius_over_a = physical_wind["donor_radius_over_a"]
+        sound_speed_ratio = max(float(fields.get("model_lab_bh_sound_speed_km_s", "10.0")), 0.0) / max(
+            physical_wind["orbital_speed_km_s"], 1e-12
+        )
     else:
         wind_input_mode = "ratio"
         wind_speed_guess = float(fields.get("model_lab_bh_wind_speed_ratio", "3.0"))
         donor_radius_over_a = float(fields.get("model_lab_bh_donor_radius_over_a", "0.15"))
+        sound_speed_ratio = max(float(fields.get("model_lab_bh_sound_speed_ratio", "0.05")), 0.0)
+        if normalization_mode == "physical":
+            raise ValueError("Physical normalization requires terminal wind speed and physical system inputs")
+
     wind_beta = float(fields.get("model_lab_bh_wind_beta", "0.8"))
     fit_eccentricity = str(fields.get("model_lab_bh_fit_eccentricity", "true")).strip().lower() in {"1", "true", "yes", "on"}
-    fit_wind_speed = str(fields.get("model_lab_bh_fit_wind_speed", "true")).strip().lower() in {"1", "true", "yes", "on"} and wind_input_mode == "ratio"
-    include_phase_lag = str(fields.get("model_lab_bh_phase_lag", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    fit_wind_speed = (
+        str(fields.get("model_lab_bh_fit_wind_speed", "true")).strip().lower() in {"1", "true", "yes", "on"}
+        and wind_input_mode == "ratio"
+    )
+    include_response_delay = (
+        str(fields.get("model_lab_bh_phase_lag", fields.get("model_lab_bh_fit_response_delay", "false"))).strip().lower()
+        in {"1", "true", "yes", "on"}
+        and response_mode != "none"
+    )
 
     phase = ((t - t0) / period) % 1.0
     centers, means, errors, counts = phase_binned_profile(phase, y, dy, n_bins)
-    model_at_data, coeff, summary = fit_bondi_hoyle_model(
+    model_at_data, coeff, fit_summary = fit_bondi_hoyle_model(
         phase,
         y,
         dy,
@@ -2354,77 +2530,255 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
         wind_speed_guess,
         wind_beta,
         donor_radius_over_a,
-        include_phase_lag,
+        include_response_delay,
+        sound_speed_ratio=sound_speed_ratio,
+        formulation=formulation,
+        compact_mass_fraction=compact_mass_fraction,
+        attenuation_tau=attenuation_tau,
+        response_mode=response_mode,
+        response_timescale_phase=response_timescale,
     )
     residuals = y - model_at_data
-    n_parameters = 2 + int(fit_eccentricity) + int(fit_wind_speed) + int(include_phase_lag)
+    n_parameters = 2 + int(fit_eccentricity) + int(fit_wind_speed) + int(include_response_delay)
     aic, bic = information_criteria(residuals, n_parameters)
-    model_phase = np.linspace(0.0, 2.0, 1600)
-    phase_lag = float(summary["phase_lag"])
-    proxy_phase, separation_phase, true_anomaly_phase = bondi_hoyle_proxy(
-        (model_phase % 1.0 - phase_lag) % 1.0,
-        float(summary["eccentricity"]),
-        float(summary["wind_speed_ratio"]),
+
+    fitted_eccentricity = float(fit_summary["eccentricity"])
+    fitted_wind_ratio = float(fit_summary["wind_terminal_ratio"])
+    response_delay = float(fit_summary["response_delay_phase"])
+    if physical_wind:
+        physical_wind = physical_wind_to_ratio(
+            period,
+            result.get("baseline_unit", result.get("period_unit", "d")),
+            fitted_eccentricity,
+            float(fields.get("model_lab_bh_vinf", "1000.0")),
+            donor_mass_msun,
+            compact_mass_msun,
+            donor_radius_rsun,
+        )
+
+    model_phase = np.linspace(0.0, 2.0, 1600, endpoint=False)
+    proxy_phase, state_phase = bhl_observable_proxy(
+        model_phase % 1.0,
+        fitted_eccentricity,
+        fitted_wind_ratio,
         wind_beta,
         donor_radius_over_a,
+        sound_speed_ratio=sound_speed_ratio,
+        formulation=formulation,
+        compact_mass_fraction=compact_mass_fraction,
+        attenuation_tau=attenuation_tau,
+        response_mode=response_mode,
+        response_delay_phase=response_delay,
+        response_timescale_phase=response_timescale,
     )
     model_flux = float(coeff[0]) + float(coeff[1]) * proxy_phase
+    intrinsic_flux = float(coeff[0]) + float(coeff[1]) * np.asarray(state_phase["intrinsic_proxy"], dtype=float)
+
     model_time = np.linspace(float(np.nanmin(t)), float(np.nanmax(t)), 2500)
     model_time_phase = ((model_time - t0) / period) % 1.0
-    proxy_time, _, _ = bondi_hoyle_proxy(
-        (model_time_phase - phase_lag) % 1.0,
-        float(summary["eccentricity"]),
-        float(summary["wind_speed_ratio"]),
+    proxy_time, _ = bhl_observable_proxy(
+        model_time_phase,
+        fitted_eccentricity,
+        fitted_wind_ratio,
         wind_beta,
         donor_radius_over_a,
+        sound_speed_ratio=sound_speed_ratio,
+        formulation=formulation,
+        compact_mass_fraction=compact_mass_fraction,
+        attenuation_tau=attenuation_tau,
+        response_mode=response_mode,
+        response_delay_phase=response_delay,
+        response_timescale_phase=response_timescale,
     )
     model_time_flux = float(coeff[0]) + float(coeff[1]) * proxy_time
-    extrema = sampled_curve_extrema(model_phase, model_flux, "BHL accretion maximum")
-    if len(extrema) == 0 and len(model_flux):
+
+    physical_outputs: dict[str, np.ndarray | float | str] = {}
+    if normalization_mode == "physical":
+        physical_outputs = physical_bhl_outputs(
+            state_phase,
+            period_seconds=physical_wind["period_seconds"],
+            semi_major_axis_m=physical_wind["semi_major_axis_m"],
+            orbital_speed_m_s=physical_wind["orbital_speed_m_s"],
+            compact_mass_msun=compact_mass_msun,
+            donor_mass_loss_msun_yr=float(fields.get("model_lab_bh_mass_loss_msun_yr", "1e-6")),
+            compact_radius_km=float(fields.get("model_lab_bh_compact_radius_km", "10.0")),
+            radiative_efficiency=float(fields.get("model_lab_bh_radiative_efficiency", "0.1")),
+            luminosity_mode=fields.get("model_lab_bh_luminosity_mode", "radius"),
+            eddington_cap=str(fields.get("model_lab_bh_eddington_cap", "false")).strip().lower()
+            in {"1", "true", "yes", "on"},
+        )
+
+    warnings, diagnostics = bhl_validity_warnings(
+        state_phase,
+        donor_radius_over_a=donor_radius_over_a,
+        donor_mass_msun=donor_mass_msun,
+        compact_mass_msun=compact_mass_msun,
+        fitted_scale=float(coeff[1]),
+        attenuation_tau=attenuation_tau,
+    )
+    for name in fit_summary.get("bounds_hit", []):
+        warnings.append(
+            {
+                "level": "caution",
+                "code": "parameter_bound",
+                "message": f"Fitted parameter '{name}' reached an allowed bound and may be weakly constrained.",
+            }
+        )
+
+    weights = safe_weights(dy, "standard")
+    sqrt_weights = np.sqrt(weights)
+
+    def candidate(name: str, design: np.ndarray) -> dict[str, float | str]:
+        candidate_coeff, *_ = np.linalg.lstsq(design * sqrt_weights[:, None], y * sqrt_weights, rcond=None)
+        candidate_residuals = y - design @ candidate_coeff
+        candidate_aic, candidate_bic = information_criteria(candidate_residuals, design.shape[1])
+        return {"model": name, "AIC": candidate_aic, "BIC": candidate_bic}
+
+    comparisons = [
+        {"model": "Bondi-Hoyle", "AIC": aic, "BIC": bic},
+        candidate("Constant", np.ones((len(phase), 1))),
+        candidate(
+            "Sinusoid",
+            np.column_stack([np.ones_like(phase), np.cos(2.0 * np.pi * phase), np.sin(2.0 * np.pi * phase)]),
+        ),
+        candidate(
+            "Fourier h=2",
+            np.column_stack(
+                [
+                    np.ones_like(phase),
+                    np.cos(2.0 * np.pi * phase),
+                    np.sin(2.0 * np.pi * phase),
+                    np.cos(4.0 * np.pi * phase),
+                    np.sin(4.0 * np.pi * phase),
+                ]
+            ),
+        ),
+    ]
+    minimum_aic = min(float(item["AIC"]) for item in comparisons)
+    minimum_bic = min(float(item["BIC"]) for item in comparisons)
+    for item in comparisons:
+        item["delta_AIC"] = float(item["AIC"]) - minimum_aic
+        item["delta_BIC"] = float(item["BIC"]) - minimum_bic
+
+    bootstrap_requested = max(int(fields.get("model_lab_bh_bootstrap", "0")), 0)
+    bootstrap_iterations = min(bootstrap_requested, 500)
+    bootstrap_samples: dict[str, list[float]] = {
+        "eccentricity": [],
+        "wind_terminal_ratio": [],
+        "response_delay_phase": [],
+    }
+    if bootstrap_iterations:
+        rng = np.random.default_rng(24680)
+        centered_residuals = residuals - np.nanmean(residuals)
+        for _ in range(bootstrap_iterations):
+            synthetic_y = model_at_data + rng.choice(centered_residuals, size=len(centered_residuals), replace=True)
+            try:
+                _, _, boot_summary = fit_bondi_hoyle_model(
+                    phase,
+                    synthetic_y,
+                    dy,
+                    fit_eccentricity,
+                    fitted_eccentricity,
+                    fit_wind_speed,
+                    fitted_wind_ratio,
+                    wind_beta,
+                    donor_radius_over_a,
+                    include_response_delay,
+                    sound_speed_ratio=sound_speed_ratio,
+                    formulation=formulation,
+                    compact_mass_fraction=compact_mass_fraction,
+                    attenuation_tau=attenuation_tau,
+                    response_mode=response_mode,
+                    response_timescale_phase=response_timescale,
+                )
+            except (ValueError, np.linalg.LinAlgError):
+                continue
+            for name in bootstrap_samples:
+                value = boot_summary.get(name)
+                if value is not None and np.isfinite(float(value)):
+                    bootstrap_samples[name].append(float(value))
+    bootstrap_intervals = {}
+    for name, values in bootstrap_samples.items():
+        if values:
+            p16, p50, p84 = np.percentile(values, [16.0, 50.0, 84.0])
+            bootstrap_intervals[name] = {"p16": float(p16), "median": float(p50), "p84": float(p84)}
+
+    extrema = sampled_curve_extrema(model_phase, model_flux, "BHL observable maximum")
+    if not extrema and len(model_flux):
         idx = int(np.nanargmax(model_flux))
-        extrema = [{"phase": float(model_phase[idx] % 1.0), "flux": float(model_flux[idx]), "kind": "BHL accretion maximum"}]
+        extrema = [{"phase": float(model_phase[idx] % 1.0), "flux": float(model_flux[idx]), "kind": "BHL observable maximum"}]
 
     summary = {
-        **summary,
+        **fit_summary,
         "period": period,
         "T0": t0,
         "wind_input_mode": wind_input_mode,
+        "normalization_mode": normalization_mode,
         "donor_radius_over_a": donor_radius_over_a,
+        "sound_speed_ratio": sound_speed_ratio,
         "AIC": aic,
         "BIC": bic,
         "n_parameters": n_parameters,
+        "bootstrap_iterations": bootstrap_iterations,
+        "bootstrap_intervals": bootstrap_intervals,
+        **diagnostics,
         **physical_wind,
     }
+    if physical_outputs:
+        summary.update(
+            {
+                "mass_loss_msun_yr": float(fields.get("model_lab_bh_mass_loss_msun_yr", "1e-6")),
+                "mdot_accretion_max_msun_yr": float(np.nanmax(np.asarray(physical_outputs["mdot_msun_yr"]))),
+                "luminosity_max_erg_s": float(np.nanmax(np.asarray(physical_outputs["luminosity_erg_s"]))),
+                "eddington_ratio_max": float(np.nanmax(np.asarray(physical_outputs["eddington_ratio"]))),
+                "luminosity_mode": str(physical_outputs["luminosity_mode"]),
+            }
+        )
     if preset_values is not None:
         summary["donor_spectral_type"] = donor_spectral_type.upper()
         summary["donor_luminosity_class"] = donor_luminosity_class.upper()
+
     parameters = [
         {"parameter": "offset", "value": float(coeff[0])},
         {"parameter": "bhl_scale", "value": float(coeff[1])},
-        {"parameter": "eccentricity", "value": float(summary["eccentricity"])},
-        {"parameter": "wind_speed_ratio_vwind_vorb", "value": float(summary["wind_speed_ratio"])},
+        {"parameter": "eccentricity", "value": fitted_eccentricity},
+        {"parameter": "wind_terminal_ratio_vinf_vo", "value": fitted_wind_ratio},
         {"parameter": "wind_beta", "value": wind_beta},
+        {"parameter": "sound_speed_ratio_cs_vo", "value": sound_speed_ratio},
         {"parameter": "donor_radius_over_a", "value": float(donor_radius_over_a)},
-        {"parameter": "phase_lag", "value": phase_lag},
+        {"parameter": "response_delay_phase", "value": response_delay},
+        {"parameter": "attenuation_tau", "value": attenuation_tau},
     ]
-    if preset_values is not None:
-        parameters.extend([
-            {"parameter": "donor_spectral_type", "value": donor_spectral_type.upper()},
-            {"parameter": "donor_luminosity_class", "value": donor_luminosity_class.upper()},
-        ])
+    error_name_map = {
+        "eccentricity": "eccentricity",
+        "wind_terminal_ratio_vinf_vo": "wind_terminal_ratio",
+        "response_delay_phase": "response_delay_phase",
+    }
+    for parameter in parameters:
+        error = fit_summary.get("parameter_errors", {}).get(error_name_map.get(parameter["parameter"], parameter["parameter"]))
+        if error is not None:
+            parameter["error"] = error
     if physical_wind:
-        parameters.extend([
-            {"parameter": "v_inf_km_s", "value": physical_wind["v_inf_km_s"]},
-            {"parameter": "donor_mass_msun", "value": physical_wind["donor_mass_msun"]},
-            {"parameter": "compact_mass_msun", "value": physical_wind["compact_mass_msun"]},
-            {"parameter": "donor_radius_rsun", "value": physical_wind["donor_radius_rsun"]},
-            {"parameter": "donor_radius_over_a_physical", "value": physical_wind["donor_radius_over_a"]},
-            {"parameter": "semi_major_axis_rsun", "value": physical_wind["semi_major_axis_rsun"]},
-            {"parameter": "orbital_speed_km_s", "value": physical_wind["orbital_speed_km_s"]},
-            {"parameter": "periastron_distance_rsun", "value": physical_wind["periastron_distance_rsun"]},
-            {"parameter": "radius_periastron_fraction", "value": physical_wind["radius_periastron_fraction"]},
-        ])
-    return {
+        parameters.extend(
+            [
+                {"parameter": "v_inf_km_s", "value": physical_wind["v_inf_km_s"]},
+                {"parameter": "donor_mass_msun", "value": donor_mass_msun},
+                {"parameter": "compact_mass_msun", "value": compact_mass_msun},
+                {"parameter": "donor_radius_rsun", "value": donor_radius_rsun},
+                {"parameter": "semi_major_axis_rsun", "value": physical_wind["semi_major_axis_rsun"]},
+                {"parameter": "orbital_speed_km_s", "value": physical_wind["orbital_speed_km_s"]},
+                {"parameter": "periastron_distance_rsun", "value": physical_wind["periastron_distance_rsun"]},
+                {"parameter": "radius_periastron_fraction", "value": physical_wind["radius_periastron_fraction"]},
+            ]
+        )
+
+    formula = (
+        "v_rel^2=(v_w-v_orb,r)^2+v_orb,t^2; "
+        "Mdot=4*pi*G^2*M_compact^2*rho/(v_rel^2+c_s^2)^(3/2)"
+        if formulation == "classical"
+        else "eta=1/4*|1-v_orb,r/v_w|*(R_acc/r)^2; R_acc=2*G*M_compact/(v_rel^2+c_s^2)"
+    )
+    output = {
         "family": "bondi_hoyle",
         "period": period,
         "t0": t0,
@@ -2440,16 +2794,41 @@ def bondi_hoyle_model_lab(result: dict, fields: dict[str, str]) -> dict:
         "model_at_data": model_at_data.tolist(),
         "model_phase": model_phase.tolist(),
         "model_flux": model_flux.tolist(),
+        "intrinsic_model_flux": intrinsic_flux.tolist(),
         "model_time": model_time.tolist(),
         "model_time_flux": model_time_flux.tolist(),
         "proxy_phase": proxy_phase.tolist(),
-        "separation_phase": separation_phase.tolist(),
-        "true_anomaly_phase": true_anomaly_phase.tolist(),
+        "intrinsic_proxy_phase": np.asarray(state_phase["intrinsic_proxy"]).tolist(),
+        "separation_phase": np.asarray(state_phase["separation"]).tolist(),
+        "true_anomaly_phase": np.asarray(state_phase["true_anomaly"]).tolist(),
+        "wind_speed_phase": np.asarray(state_phase["wind_speed"]).tolist(),
+        "orbital_radial_phase": np.asarray(state_phase["orbital_radial"]).tolist(),
+        "orbital_tangential_phase": np.asarray(state_phase["orbital_tangential"]).tolist(),
+        "relative_speed_phase": np.asarray(state_phase["relative_speed"]).tolist(),
+        "mach_phase": np.asarray(state_phase["mach"]).tolist(),
+        "density_shape_phase": np.asarray(state_phase["density_shape"]).tolist(),
+        "column_ratio_phase": np.asarray(state_phase["column_ratio"]).tolist(),
+        "attenuation_phase": np.asarray(state_phase["attenuation"]).tolist(),
+        "accretion_radius_over_a_phase": np.asarray(state_phase["accretion_radius_over_a"]).tolist(),
+        "efficiency_phase": np.asarray(state_phase["selected_efficiency"]).tolist(),
         "extrema": extrema,
         "parameters": parameters,
         "summary": summary,
-        "formula": "y(t) = C + A * [rho(r) / v_rel^3], rho ~ 1/(r^2 v_w), v_rel^2 ~ v_w^2 + v_orb^2; toy wind-fed accretion model",
+        "warnings": warnings,
+        "model_comparison": comparisons,
+        "formula": formula,
     }
+    if physical_outputs:
+        for key in (
+            "density_kg_m3",
+            "mdot_kg_s",
+            "mdot_msun_yr",
+            "luminosity_w",
+            "luminosity_erg_s",
+            "eddington_ratio",
+        ):
+            output[f"{key}_phase"] = np.asarray(physical_outputs[key]).tolist()
+    return output
 
 
 def epoch_folding_statistic(

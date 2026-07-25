@@ -32,7 +32,7 @@ from app import BHL_DONOR_PRESETS, advanced_time_frequency_map, bhl_donor_preset
 try:
     APP_VERSION = (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip()
 except OSError:
-    APP_VERSION = "1.6.0"
+    APP_VERSION = "1.7.0"
 
 REPORT_LOGO_PATH = Path(__file__).resolve().parent / "static" / "report_logo.png"
 REPORT_LOGO_WIDTH_PX = 150
@@ -1215,6 +1215,24 @@ def estimate_text_height(text: str, width: int = 92, line_height: float = 0.023)
     return min(0.36, 0.07 + line_height * max(1, len(lines)))
 
 
+def split_report_text(text: str, wrap_width: int = 88, line_budget: int = 10) -> list[str]:
+    """Split long report prose into blocks that draw without silent clipping."""
+    chunks: list[str] = []
+    current: list[str] = []
+    used_lines = 0
+    for raw in str(text).splitlines() or [""]:
+        wrapped_lines = max(1, len(textwrap.wrap(raw, width=wrap_width) or [""]))
+        if current and used_lines + wrapped_lines > line_budget:
+            chunks.append("\n".join(current))
+            current = []
+            used_lines = 0
+        current.append(raw)
+        used_lines += wrapped_lines
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
 def draw_wrapped_lines(
     fig: Figure,
     x: float,
@@ -1459,7 +1477,17 @@ def draw_model_lab_summary_plot(fig: Figure, x: float, y: float, width: float, h
     if len(phase):
         ax1.errorbar(np.r_[phase, phase + 1], np.r_[flux, flux], yerr=np.r_[error, error], fmt="o", ms=2.4, color="#20242a", ecolor="#8b93a5", lw=0.45)
     if len(model_phase):
-        ax1.plot(np.r_[model_phase, model_phase + 1], np.r_[model_flux, model_flux], color="#2457a6", lw=1.1)
+        if float(np.nanmax(model_phase) - np.nanmin(model_phase)) <= 1.05:
+            plotted_phase = np.r_[model_phase, model_phase + 1]
+            plotted_flux = np.r_[model_flux, model_flux]
+        else:
+            plotted_phase = model_phase
+            plotted_flux = model_flux
+        ax1.plot(plotted_phase, plotted_flux, color="#2457a6", lw=1.1)
+    intrinsic_flux = np.asarray(model_result.get("intrinsic_model_flux", []), dtype=float)
+    if len(intrinsic_flux) == len(model_phase) and len(model_phase):
+        ax1.plot(model_phase, intrinsic_flux, color="#d97706", lw=0.9, ls="--", label="intrinsic")
+        ax1.legend(fontsize=6, loc="best")
     ax1.set_xlim(0, 2)
     ax1.set_title("Folded model", fontsize=9)
     ax1.set_xlabel("Phase", fontsize=8)
@@ -1623,8 +1651,8 @@ def model_lab_pedagogical_hint(model_result: dict) -> str:
         )
     if family == "bondi_hoyle":
         return (
-            "This toy model tests whether denser or slower wind near periastron can explain the modulation. "
-            "Fitted parameters are phenomenological unless masses, wind law, and geometry are externally constrained."
+            "The model uses the full vector wind-orbit relative velocity and reports where analytic BHL assumptions fail. "
+            "Count-rate fits remain phenomenological when absorption, hydrodynamic gradients, or transient discs are important."
         )
     if family == "pulse":
         return (
@@ -1733,14 +1761,22 @@ def model_lab_report_summary(model_result: dict, app_result: dict) -> str:
     elif family == "bondi_hoyle":
         maxima = model_result.get("extrema", [])
         lines.extend([
-            "Model family: Bondi-Hoyle accretion toy model",
+            "Model family: Bondi-Hoyle wind accretion",
             f"Orbital period: {fmt_value(model_result.get('period'), 6)} {period_unit}",
             f"T0 / periastron epoch: {fmt_value(model_result.get('t0'), 6)} {time_unit}",
+            f"Formulation: {summary.get('formulation', 'classical')}",
+            f"Calculation mode: {summary.get('normalization_mode', 'normalized')}",
+            f"Validity status: {summary.get('validity_status', 'not evaluated')}",
             f"Eccentricity: {fmt_value(summary.get('eccentricity'), 4)}",
-            f"Effective v_wind / v_orb: {fmt_value(summary.get('wind_speed_ratio'), 4)}",
+            f"Terminal wind ratio w_inf=v_inf/v_o: {fmt_value(summary.get('wind_terminal_ratio', summary.get('wind_speed_ratio')), 4)}",
             f"Wind beta: {fmt_value(summary.get('wind_beta'), 4)}",
+            f"Sound speed c_s/v_o: {fmt_value(summary.get('sound_speed_ratio'), 4)}",
             f"Wind launch radius R_donor/a: {fmt_value(summary.get('donor_radius_over_a'))}",
-            f"Phase lag: {fmt_value(summary.get('phase_lag'), 5)}",
+            f"Response model: {summary.get('response_mode', 'none')}",
+            f"Response delay: {fmt_value(summary.get('response_delay_phase'), 5)} phase",
+            f"Mach range: {fmt_value(summary.get('mach_min'))} to {fmt_value(summary.get('mach_max'))}",
+            f"Maximum R_acc/r: {fmt_value(summary.get('accretion_radius_over_r_max'))}",
+            f"Maximum capture efficiency: {fmt_value(summary.get('capture_efficiency_max'))}",
         ])
         if summary.get("donor_spectral_type"):
             lines.append(f"Donor preset: {summary.get('donor_spectral_type')} {summary.get('donor_luminosity_class', '')}")
@@ -1753,13 +1789,27 @@ def model_lab_report_summary(model_result: dict, app_result: dict) -> str:
                 f"Orbital speed scale: {fmt_value(summary.get('orbital_speed_km_s'))} km/s",
             ])
         if maxima:
-            lines.append(f"Model accretion maximum phase: {fmt_value(maxima[0].get('phase'))}")
+            lines.append(f"Model observable maximum phase: {fmt_value(maxima[0].get('phase'))}")
+        if summary.get("normalization_mode") == "physical":
+            lines.extend([
+                f"Donor mass-loss rate: {fmt_value(summary.get('mass_loss_msun_yr'))} Msun/yr",
+                f"Maximum accretion rate: {fmt_value(summary.get('mdot_accretion_max_msun_yr'))} Msun/yr",
+                f"Maximum luminosity: {fmt_value(summary.get('luminosity_max_erg_s'))} erg/s",
+                f"Maximum Eddington ratio: {fmt_value(summary.get('eddington_ratio_max'))}",
+            ])
         lines.extend([
             f"Accretion scale/sign: {fmt_value(summary.get('scale'))}",
             f"BIC: {fmt_value(summary.get('BIC'))}",
             f"RMS: {fmt_value(summary.get('rms'))}",
             f"Pedagogical hint: {model_lab_pedagogical_hint(model_result)}",
         ])
+        for warning in model_result.get("warnings", []):
+            lines.append(f"Validity warning [{warning.get('level')}]: {warning.get('message')}")
+        for comparison in model_result.get("model_comparison", []):
+            lines.append(
+                f"Model comparison {comparison.get('model')}: delta AIC={fmt_value(comparison.get('delta_AIC'))}, "
+                f"delta BIC={fmt_value(comparison.get('delta_BIC'))}"
+            )
     elif family == "pulse":
         maxima = model_result.get("maxima", [])
         epoch_stat = summary.get("epoch_folding_statistic")
@@ -1952,15 +2002,17 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 line_height=0.036,
                 line_gap=0.15,
             )
-            report.text_block(
-                "Model laboratory summary",
-                model_lab_report_summary(model_result, result),
-                min_height=0.36,
-                size=8.0,
-                wrap_width=88,
-                line_height=0.027,
-                line_gap=0.055,
-            )
+            summary_chunks = split_report_text(model_lab_report_summary(model_result, result), wrap_width=88, line_budget=10)
+            for chunk_index, summary_chunk in enumerate(summary_chunks):
+                report.text_block(
+                    "Model laboratory summary" if chunk_index == 0 else "Model laboratory summary (continued)",
+                    summary_chunk,
+                    min_height=0.30,
+                    size=8.0,
+                    wrap_width=88,
+                    line_height=0.027,
+                    line_gap=0.055,
+                )
             report.text_block(
                 "Model-laboratory evidence",
                 str(st.session_state.get("evidence_model_lab_comments", "No comments provided.")),
@@ -2345,14 +2397,24 @@ def model_lab_bondi_hoyle_plot(model_result: dict, app_result: dict) -> go.Figur
         y=model_result.get("model_flux", []),
         mode="lines",
         line=dict(color="#2457a6", width=2),
-        name="Bondi-Hoyle toy model",
+        name="Observable BHL model",
         hovertemplate="Phase=%{x:.5f}<br>Model=%{y:.6g}<extra></extra>",
     ))
+    intrinsic = model_result.get("intrinsic_model_flux", [])
+    if len(intrinsic):
+        fig.add_trace(go.Scatter(
+            x=model_result.get("model_phase", []),
+            y=intrinsic,
+            mode="lines",
+            line=dict(color="#d97706", width=1.7, dash="dash"),
+            name="Intrinsic accretion proxy",
+            hovertemplate="Phase=%{x:.5f}<br>Intrinsic=%{y:.6g}<extra></extra>",
+        ))
     for item in model_result.get("extrema", []):
         for offset in [0.0, 1.0]:
             fig.add_vline(x=float(item["phase"]) + offset, line_dash="dash", line_color="#2457a6", opacity=0.65)
     fig.update_layout(
-        title="Bondi-Hoyle wind accretion toy model",
+        title="Bondi-Hoyle wind accretion model",
         xaxis_title="Orbital phase",
         yaxis_title=f"Weighted mean {flux_axis_title(app_result).lower()}",
         height=480,
@@ -2361,6 +2423,73 @@ def model_lab_bondi_hoyle_plot(model_result: dict, app_result: dict) -> go.Figur
     )
     fig.update_xaxes(range=[0, 2])
     apply_flux_axis(fig, app_result)
+    return frame(fig)
+
+
+def model_lab_bondi_hoyle_diagnostics_plot(model_result: dict) -> go.Figure:
+    phase = model_result.get("model_phase", [])
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        subplot_titles=("Dimensionless velocity components", "Mach number and accretion radius", "Capture efficiency and density shape"),
+        specs=[[{}], [{"secondary_y": True}], [{"secondary_y": True}]],
+    )
+    velocity_series = [
+        ("Wind", "wind_speed_phase", "#2563eb"),
+        ("Orbital radial", "orbital_radial_phase", "#dc2626"),
+        ("Orbital tangential", "orbital_tangential_phase", "#7c3aed"),
+        ("Relative", "relative_speed_phase", "#111827"),
+    ]
+    for name, key, color in velocity_series:
+        fig.add_trace(go.Scatter(x=phase, y=model_result.get(key, []), name=name, line=dict(color=color)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=phase, y=model_result.get("mach_phase", []), name="Mach", line=dict(color="#0f766e")), row=2, col=1, secondary_y=False)
+    fig.add_trace(go.Scatter(x=phase, y=model_result.get("accretion_radius_over_a_phase", []), name="R_acc / a", line=dict(color="#ea580c")), row=2, col=1, secondary_y=True)
+    fig.add_trace(go.Scatter(x=phase, y=model_result.get("efficiency_phase", []), name="Capture efficiency", line=dict(color="#16a34a")), row=3, col=1, secondary_y=False)
+    fig.add_trace(go.Scatter(x=phase, y=model_result.get("density_shape_phase", []), name="Density shape", line=dict(color="#9333ea")), row=3, col=1, secondary_y=True)
+    fig.update_xaxes(title_text="Orbital phase", range=[0, 2], row=3, col=1)
+    fig.update_yaxes(title_text="v / v_o", row=1, col=1)
+    fig.update_yaxes(title_text="Mach", row=2, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="R_acc / a", row=2, col=1, secondary_y=True)
+    fig.update_yaxes(title_text="Efficiency", row=3, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="Relative density", row=3, col=1, secondary_y=True)
+    fig.update_layout(height=780, margin=dict(l=20, r=20, t=70, b=30), legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0))
+    return frame(fig)
+
+
+def model_lab_bondi_hoyle_physical_plot(model_result: dict) -> go.Figure:
+    phase = model_result.get("model_phase", [])
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        subplot_titles=("Physical mass-accretion rate", "Intrinsic accretion luminosity"),
+        specs=[[{}], [{"secondary_y": True}]],
+    )
+    fig.add_trace(
+        go.Scatter(x=phase, y=model_result.get("mdot_msun_yr_phase", []), name="Mdot acc [Msun/yr]", line=dict(color="#2563eb")),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(x=phase, y=model_result.get("luminosity_erg_s_phase", []), name="Luminosity [erg/s]", line=dict(color="#dc2626")),
+        row=2,
+        col=1,
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(x=phase, y=model_result.get("eddington_ratio_phase", []), name="L/L_Edd", line=dict(color="#7c3aed", dash="dash")),
+        row=2,
+        col=1,
+        secondary_y=True,
+    )
+    fig.update_xaxes(title_text="Orbital phase", range=[0, 2], row=2, col=1)
+    fig.update_yaxes(title_text="Msun/yr", row=1, col=1)
+    fig.update_yaxes(title_text="erg/s", row=2, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="L/L_Edd", row=2, col=1, secondary_y=True)
+    fig.update_layout(height=560, margin=dict(l=20, r=20, t=70, b=30), legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0))
     return frame(fig)
 
 
@@ -3262,11 +3391,18 @@ def model_lab_controls(prefix: str, location=st) -> None:
         location.number_input("Display phase bins", min_value=4, max_value=120, value=st.session_state.get(f"{prefix}_model_lab_bh_bins", 24), key=f"{prefix}_model_lab_bh_bins")
         cols = location.columns(2)
         cols[0].number_input("Initial/fixed eccentricity", min_value=0.0, max_value=0.9, value=st.session_state.get(f"{prefix}_model_lab_bh_eccentricity", 0.3), step=0.05, format="%.3f", key=f"{prefix}_model_lab_bh_eccentricity")
-        wind_mode = location.radio("Wind speed input", ["v_inf [km/s]", "v_wind / v_orb"], horizontal=True, key=f"{prefix}_model_lab_bh_wind_input_label")
-        st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] = "ratio" if wind_mode == "v_wind / v_orb" else "v_inf"
+        wind_label_key = f"{prefix}_model_lab_bh_wind_input_label"
+        if st.session_state.get(wind_label_key) == "v_wind / v_orb":
+            st.session_state[wind_label_key] = "w_inf = v_inf / v_o"
+        wind_mode = location.radio("Wind speed input", ["v_inf [km/s]", "w_inf = v_inf / v_o"], horizontal=True, key=wind_label_key)
+        st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] = "ratio" if wind_mode == "w_inf = v_inf / v_o" else "v_inf"
         if st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] == "ratio":
-            cols[1].number_input("v_wind / v_orb", min_value=0.05, max_value=20.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_speed_ratio", 3.0), step=0.1, format="%.3f", key=f"{prefix}_model_lab_bh_wind_speed_ratio")
+            cols[1].number_input("Terminal wind ratio w_inf", min_value=0.05, max_value=20.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_speed_ratio", 3.0), step=0.1, format="%.3f", key=f"{prefix}_model_lab_bh_wind_speed_ratio")
             location.number_input("Donor radius / a", min_value=0.001, max_value=0.95, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_radius_over_a", 0.15), step=0.01, format="%.3f", key=f"{prefix}_model_lab_bh_donor_radius_over_a")
+            ratio_cols = location.columns(3)
+            ratio_cols[0].number_input("Donor mass [Msun]", min_value=0.1, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_mass", 18.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_mass")
+            ratio_cols[1].number_input("Compact mass [Msun]", min_value=0.1, max_value=50.0, value=st.session_state.get(f"{prefix}_model_lab_bh_compact_mass", 1.4), step=0.1, format="%.2f", key=f"{prefix}_model_lab_bh_compact_mass")
+            ratio_cols[2].number_input("Sound speed c_s / v_o", min_value=0.0, max_value=10.0, value=st.session_state.get(f"{prefix}_model_lab_bh_sound_speed_ratio", 0.05), step=0.01, format="%.3f", key=f"{prefix}_model_lab_bh_sound_speed_ratio")
         else:
             cols[1].number_input("v_inf [km/s]", min_value=1.0, max_value=5000.0, value=st.session_state.get(f"{prefix}_model_lab_bh_vinf", 1000.0), step=50.0, format="%.1f", key=f"{prefix}_model_lab_bh_vinf")
             donor_options = ["Manual"] + list(BHL_DONOR_PRESETS.keys())
@@ -3304,11 +3440,50 @@ def model_lab_controls(prefix: str, location=st) -> None:
             physical_cols[0].number_input("Donor mass [Msun]", min_value=0.1, max_value=150.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_mass", 18.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_mass", disabled=preset_active)
             physical_cols[1].number_input("Compact mass [Msun]", min_value=0.1, max_value=50.0, value=st.session_state.get(f"{prefix}_model_lab_bh_compact_mass", 1.4), step=0.1, format="%.2f", key=f"{prefix}_model_lab_bh_compact_mass")
             physical_cols[2].number_input("Donor radius [Rsun]", min_value=0.1, max_value=2000.0, value=st.session_state.get(f"{prefix}_model_lab_bh_donor_radius", 8.0), step=0.5, format="%.2f", key=f"{prefix}_model_lab_bh_donor_radius", disabled=preset_active)
-        location.number_input("Wind beta", min_value=0.0, max_value=5.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_beta", 0.8), step=0.1, format="%.2f", key=f"{prefix}_model_lab_bh_wind_beta")
+            location.number_input("Sound speed c_s [km/s]", min_value=0.0, max_value=2000.0, value=st.session_state.get(f"{prefix}_model_lab_bh_sound_speed_km_s", 10.0), step=5.0, format="%.2f", key=f"{prefix}_model_lab_bh_sound_speed_km_s")
+        model_cols = location.columns(3)
+        model_cols[0].number_input("Wind beta", min_value=0.0, max_value=5.0, value=st.session_state.get(f"{prefix}_model_lab_bh_wind_beta", 0.8), step=0.1, format="%.2f", key=f"{prefix}_model_lab_bh_wind_beta")
+        formulation_label = model_cols[1].selectbox(
+            "Accretion formulation",
+            ["Classical pressure-aware BHL", "Revised binary BHL"],
+            key=f"{prefix}_model_lab_bh_formulation_label",
+        )
+        st.session_state[f"{prefix}_model_lab_bh_formulation"] = "revised" if formulation_label.startswith("Revised") else "classical"
+        normalization_options = (
+            ["Normalized teaching curve"]
+            if st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] == "ratio"
+            else ["Normalized teaching curve", "Physical Mdot and luminosity"]
+        )
+        normalization_label = model_cols[2].selectbox(
+            "Calculation mode",
+            normalization_options,
+            key=f"{prefix}_model_lab_bh_normalization_label",
+        )
+        st.session_state[f"{prefix}_model_lab_bh_normalization_mode"] = "physical" if normalization_label.startswith("Physical") else "normalized"
+        if st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] == "ratio":
+            st.session_state[f"{prefix}_model_lab_bh_normalization_mode"] = "normalized"
+        if st.session_state[f"{prefix}_model_lab_bh_normalization_mode"] == "physical":
+            with location.expander("Physical accretion and luminosity", expanded=True):
+                physical_output_cols = st.columns(3)
+                physical_output_cols[0].number_input("Donor mass-loss [Msun/yr]", min_value=0.0, value=st.session_state.get(f"{prefix}_model_lab_bh_mass_loss_msun_yr", 1e-6), format="%.3e", key=f"{prefix}_model_lab_bh_mass_loss_msun_yr")
+                physical_output_cols[1].number_input("Compact radius [km]", min_value=0.001, value=st.session_state.get(f"{prefix}_model_lab_bh_compact_radius_km", 10.0), format="%.3f", key=f"{prefix}_model_lab_bh_compact_radius_km")
+                physical_output_cols[2].number_input("Radiative efficiency", min_value=0.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_bh_radiative_efficiency", 0.1), step=0.01, format="%.3f", key=f"{prefix}_model_lab_bh_radiative_efficiency")
+                luminosity_label = st.radio("Luminosity prescription", ["G M Mdot / R", "eta_rad Mdot c^2"], horizontal=True, key=f"{prefix}_model_lab_bh_luminosity_label")
+                st.session_state[f"{prefix}_model_lab_bh_luminosity_mode"] = "efficiency" if luminosity_label.startswith("eta") else "radius"
+                st.checkbox("Apply an explicit Eddington cap", value=st.session_state.get(f"{prefix}_model_lab_bh_eddington_cap", False), key=f"{prefix}_model_lab_bh_eddington_cap")
+        with location.expander("Observable transfer and inference", expanded=False):
+            transfer_cols = st.columns(3)
+            response_label = transfer_cols[0].selectbox("Response model", ["None", "Phase delay", "Causal exponential"], key=f"{prefix}_model_lab_bh_response_label")
+            response_map = {"None": "none", "Phase delay": "delay", "Causal exponential": "exponential"}
+            st.session_state[f"{prefix}_model_lab_bh_response_mode"] = response_map[response_label]
+            transfer_cols[1].number_input("Response timescale [phase]", min_value=0.0, max_value=1.0, value=st.session_state.get(f"{prefix}_model_lab_bh_response_timescale", 0.05), step=0.01, format="%.3f", key=f"{prefix}_model_lab_bh_response_timescale", disabled=response_label != "Causal exponential")
+            transfer_cols[2].number_input("Effective attenuation tau", min_value=0.0, max_value=20.0, value=st.session_state.get(f"{prefix}_model_lab_bh_attenuation_tau", 0.0), step=0.05, format="%.3f", key=f"{prefix}_model_lab_bh_attenuation_tau")
+            st.caption("Attenuation is a phenomenological wind-column proxy, not full energy-dependent radiative transfer.")
+            st.number_input("Residual bootstrap iterations", min_value=0, max_value=500, value=st.session_state.get(f"{prefix}_model_lab_bh_bootstrap", 0), step=25, key=f"{prefix}_model_lab_bh_bootstrap")
         cols = location.columns(3)
         cols[0].checkbox("Fit eccentricity", value=st.session_state.get(f"{prefix}_model_lab_bh_fit_eccentricity", True), key=f"{prefix}_model_lab_bh_fit_eccentricity")
         cols[1].checkbox("Fit wind speed", value=st.session_state.get(f"{prefix}_model_lab_bh_fit_wind_speed", True), disabled=st.session_state[f"{prefix}_model_lab_bh_wind_input_mode"] == "v_inf", key=f"{prefix}_model_lab_bh_fit_wind_speed")
-        cols[2].checkbox("Fit phase lag", value=st.session_state.get(f"{prefix}_model_lab_bh_phase_lag", True), key=f"{prefix}_model_lab_bh_phase_lag")
+        cols[2].checkbox("Fit response delay", value=st.session_state.get(f"{prefix}_model_lab_bh_phase_lag", False), key=f"{prefix}_model_lab_bh_phase_lag", disabled=st.session_state.get(f"{prefix}_model_lab_bh_response_mode", "none") == "none")
         location.checkbox(
             "Show full data set with model",
             value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
@@ -3331,11 +3506,24 @@ def model_lab_controls(prefix: str, location=st) -> None:
                 "model_lab_bh_compact_mass": str(st.session_state.get(f"{prefix}_model_lab_bh_compact_mass", 1.4)),
                 "model_lab_bh_donor_radius": str(st.session_state.get(f"{prefix}_model_lab_bh_donor_radius", 8.0)),
                 "model_lab_bh_wind_beta": str(st.session_state.get(f"{prefix}_model_lab_bh_wind_beta", 0.8)),
+                "model_lab_bh_sound_speed_ratio": str(st.session_state.get(f"{prefix}_model_lab_bh_sound_speed_ratio", 0.05)),
+                "model_lab_bh_sound_speed_km_s": str(st.session_state.get(f"{prefix}_model_lab_bh_sound_speed_km_s", 10.0)),
+                "model_lab_bh_formulation": st.session_state.get(f"{prefix}_model_lab_bh_formulation", "classical"),
+                "model_lab_bh_normalization_mode": st.session_state.get(f"{prefix}_model_lab_bh_normalization_mode", "normalized"),
+                "model_lab_bh_response_mode": st.session_state.get(f"{prefix}_model_lab_bh_response_mode", "none"),
+                "model_lab_bh_response_timescale": str(st.session_state.get(f"{prefix}_model_lab_bh_response_timescale", 0.05)),
+                "model_lab_bh_attenuation_tau": str(st.session_state.get(f"{prefix}_model_lab_bh_attenuation_tau", 0.0)),
+                "model_lab_bh_bootstrap": str(st.session_state.get(f"{prefix}_model_lab_bh_bootstrap", 0)),
+                "model_lab_bh_mass_loss_msun_yr": str(st.session_state.get(f"{prefix}_model_lab_bh_mass_loss_msun_yr", 1e-6)),
+                "model_lab_bh_compact_radius_km": str(st.session_state.get(f"{prefix}_model_lab_bh_compact_radius_km", 10.0)),
+                "model_lab_bh_radiative_efficiency": str(st.session_state.get(f"{prefix}_model_lab_bh_radiative_efficiency", 0.1)),
+                "model_lab_bh_luminosity_mode": st.session_state.get(f"{prefix}_model_lab_bh_luminosity_mode", "radius"),
+                "model_lab_bh_eddington_cap": "true" if st.session_state.get(f"{prefix}_model_lab_bh_eddington_cap", False) else "false",
                 "model_lab_bh_fit_eccentricity": "true" if st.session_state.get(f"{prefix}_model_lab_bh_fit_eccentricity", True) else "false",
                 "model_lab_bh_fit_wind_speed": "true" if st.session_state.get(f"{prefix}_model_lab_bh_fit_wind_speed", True) else "false",
                 "model_lab_bh_phase_lag": "true" if st.session_state.get(f"{prefix}_model_lab_bh_phase_lag", True) else "false",
             })
-            with st.spinner("Fitting Bondi-Hoyle toy model..."):
+            with st.spinner("Fitting the Bondi-Hoyle model and validity diagnostics..."):
                 try:
                     st.session_state["app_model_lab_result"] = bondi_hoyle_model_lab(result, fields)
                 except ValueError as exc:
@@ -3807,11 +3995,18 @@ def render_bondi_hoyle_highlight(model_result: dict, app_result: dict) -> None:
     lines = [
         f"<strong>Orbital period:</strong> {float(model_result.get('period', 0.0)):.6g} {period_unit}",
         f"<strong>T0 / periastron epoch:</strong> {float(model_result.get('t0', 0.0)):.6g} {time_unit}",
+        f"<strong>Formulation:</strong> {str(summary.get('formulation', 'classical')).replace('_', ' ').title()}",
+        f"<strong>Calculation mode:</strong> {str(summary.get('normalization_mode', 'normalized')).title()}",
+        f"<strong>Validity:</strong> {str(summary.get('validity_status', 'not evaluated')).upper()}",
         f"<strong>Eccentricity:</strong> {float(summary.get('eccentricity', 0.0)):.4g}",
-        f"<strong>Effective v_wind / v_orb:</strong> {float(summary.get('wind_speed_ratio', 0.0)):.4g}",
+        f"<strong>Terminal wind ratio w_inf=v_inf/v_o:</strong> {float(summary.get('wind_terminal_ratio', summary.get('wind_speed_ratio', 0.0))):.4g}",
         f"<strong>Wind beta:</strong> {float(summary.get('wind_beta', 0.0)):.4g}",
         f"<strong>Wind launch radius R_donor/a:</strong> {float(summary.get('donor_radius_over_a', 0.0)):.5g}",
-        f"<strong>Phase lag:</strong> {float(summary.get('phase_lag', 0.0)):+.5g}",
+        f"<strong>Sound speed c_s/v_o:</strong> {float(summary.get('sound_speed_ratio', 0.0)):.5g}",
+        f"<strong>Response:</strong> {summary.get('response_mode', 'none')} (delay {float(summary.get('response_delay_phase', 0.0)):+.5g} phase)",
+        f"<strong>Mach range:</strong> {float(summary.get('mach_min', 0.0)):.4g}–{float(summary.get('mach_max', 0.0)):.4g}",
+        f"<strong>Maximum R_acc/r:</strong> {float(summary.get('accretion_radius_over_r_max', 0.0)):.4g}",
+        f"<strong>Maximum capture efficiency:</strong> {float(summary.get('capture_efficiency_max', 0.0)):.4g}",
     ]
     if summary.get("donor_spectral_type"):
         lines.append(
@@ -3828,23 +4023,37 @@ def render_bondi_hoyle_highlight(model_result: dict, app_result: dict) -> None:
         if summary.get("radius_periastron_fraction") is not None:
             lines.append(f"<strong>R_donor / r_periastron:</strong> {float(summary.get('radius_periastron_fraction', 0.0)):.5g}")
     if maxima:
-        lines.append(f"<strong>Model accretion maximum phase:</strong> {float(maxima[0].get('phase', 0.0)):.5g}")
+        lines.append(f"<strong>Model observable maximum phase:</strong> {float(maxima[0].get('phase', 0.0)):.5g}")
     if summary.get("scale") is not None:
         lines.append(f"<strong>Accretion scale/sign:</strong> {float(summary['scale']):.5g}")
+    if summary.get("normalization_mode") == "physical":
+        lines.extend([
+            f"<strong>Maximum Mdot acc:</strong> {float(summary.get('mdot_accretion_max_msun_yr', 0.0)):.5g} Msun/yr",
+            f"<strong>Maximum luminosity:</strong> {float(summary.get('luminosity_max_erg_s', 0.0)):.5g} erg/s",
+            f"<strong>Maximum Eddington ratio:</strong> {float(summary.get('eddington_ratio_max', 0.0)):.5g}",
+        ])
     if summary.get("BIC") is not None:
         lines.append(f"<strong>BIC:</strong> {float(summary['BIC']):.5g}")
     if summary.get("rms") is not None:
         lines.append(f"<strong>RMS:</strong> {float(summary['rms']):.5g}")
-    lines.append("<strong>Pedagogical hint:</strong> this toy model tests whether denser/slower wind near periastron can explain the modulation; fitted parameters are phenomenological unless masses, wind law, and geometry are externally constrained.")
+    lines.append("<strong>Interpretation:</strong> validity flags identify where the analytic wind-fed approximation may require hydrodynamics, transient-disc physics, or radiative transfer.")
     st.markdown(
         """
         <div style="border: 1px solid #d4be8a; background: #fff8e8; padding: 0.85rem 1rem; border-radius: 0.45rem; margin: 0.35rem 0 1rem 0;">
-          <div style="font-weight: 800; font-size: 1.02rem; margin-bottom: 0.35rem;">Bondi-Hoyle toy accretion summary</div>
+          <div style="font-weight: 800; font-size: 1.02rem; margin-bottom: 0.35rem;">Bondi-Hoyle accretion and validity summary</div>
           <div style="line-height: 1.65;">""" + "<br>".join(lines) + """</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    for warning in model_result.get("warnings", []):
+        message = f"{warning.get('code', 'diagnostic')}: {warning.get('message', '')}"
+        if warning.get("level") == "outside assumptions":
+            st.error(message)
+        elif warning.get("level") == "caution":
+            st.warning(message)
+        else:
+            st.info(message)
 
 
 def render_pulse_highlight(model_result: dict, app_result: dict) -> None:
@@ -3974,29 +4183,51 @@ def render_model_lab_outputs(result: dict | None) -> None:
         prefix_name = "binary_assistant"
     elif model_result.get("family") == "bondi_hoyle":
         st.plotly_chart(model_lab_bondi_hoyle_plot(model_result, result), use_container_width=True)
+        with st.expander("Orbital-flow and validity diagnostics", expanded=True):
+            st.plotly_chart(model_lab_bondi_hoyle_diagnostics_plot(model_result), use_container_width=True)
+            if model_result.get("mdot_msun_yr_phase"):
+                st.plotly_chart(model_lab_bondi_hoyle_physical_plot(model_result), use_container_width=True)
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
                 use_container_width=True,
             )
         summary = model_result.get("summary", {})
-        info_cols = st.columns(4)
+        info_cols = st.columns(5)
         info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
         info_cols[1].metric("Eccentricity", f"{float(summary.get('eccentricity', 0.0)):.4g}")
-        info_cols[2].metric("BIC", f"{float(summary.get('BIC', 0.0)):.5g}")
-        info_cols[3].metric("RMS", f"{float(summary.get('rms', 0.0)):.5g}")
+        info_cols[2].metric("Validity", str(summary.get("validity_status", "unknown")).upper())
+        info_cols[3].metric("BIC", f"{float(summary.get('BIC', 0.0)):.5g}")
+        info_cols[4].metric("RMS", f"{float(summary.get('rms', 0.0)):.5g}")
         render_bondi_hoyle_highlight(model_result, result)
         cols = st.columns([1.05, 1.0])
         with cols[0]:
-            st.caption("Bondi-Hoyle toy model formula")
+            st.caption("Bondi-Hoyle formulation")
             st.code(str(model_result.get("formula", "")), language="text")
             st.caption("Fit parameters")
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), use_container_width=True, hide_index=True)
         with cols[1]:
             st.caption("Global Bondi-Hoyle fit summary")
             st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
-            st.caption("Accretion maxima")
+            st.caption("Observable maxima")
             st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
+        comparison_cols = st.columns(2)
+        with comparison_cols[0]:
+            st.caption("Model comparison")
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("model_comparison", []))), use_container_width=True, hide_index=True)
+        with comparison_cols[1]:
+            names = summary.get("nonlinear_parameter_names", [])
+            correlation = summary.get("correlation_matrix", [])
+            st.caption("Local parameter correlation")
+            if names and correlation:
+                st.dataframe(pd.DataFrame(correlation, index=names, columns=names), use_container_width=True)
+            else:
+                st.info("No nonlinear covariance matrix is available for this fit.")
+            bootstrap_intervals = summary.get("bootstrap_intervals", {})
+            if bootstrap_intervals:
+                st.caption("Residual-bootstrap intervals")
+                bootstrap_rows = [{"parameter": name, **values} for name, values in bootstrap_intervals.items()]
+                st.dataframe(clean_dataframe(pd.DataFrame(bootstrap_rows)), use_container_width=True, hide_index=True)
         prefix_name = "bondi_hoyle"
     elif model_result.get("family") == "pulse":
         render_barycentric_status(result, pulse_context=True)
@@ -4062,6 +4293,27 @@ def render_model_lab_outputs(result: dict | None) -> None:
     else:
         return
     render_model_lab_evidence(model_result)
+    phase_model_download = {
+        "phase": model_result.get("model_phase", []),
+        "model_flux": model_result.get("model_flux", []),
+    }
+    if model_result.get("family") == "bondi_hoyle":
+        phase_model_download.update(
+            {
+                "intrinsic_model_flux": model_result.get("intrinsic_model_flux", []),
+                "separation_over_a": model_result.get("separation_phase", []),
+                "wind_speed_over_vo": model_result.get("wind_speed_phase", []),
+                "orbital_radial_over_vo": model_result.get("orbital_radial_phase", []),
+                "orbital_tangential_over_vo": model_result.get("orbital_tangential_phase", []),
+                "relative_speed_over_vo": model_result.get("relative_speed_phase", []),
+                "mach": model_result.get("mach_phase", []),
+                "accretion_radius_over_a": model_result.get("accretion_radius_over_a_phase", []),
+                "capture_efficiency": model_result.get("efficiency_phase", []),
+                "mdot_msun_yr": model_result.get("mdot_msun_yr_phase", []),
+                "luminosity_erg_s": model_result.get("luminosity_erg_s_phase", []),
+                "eddington_ratio": model_result.get("eddington_ratio_phase", []),
+            }
+        )
     dl_cols = st.columns(3)
     with dl_cols[0]:
         dataframe_download(
@@ -4078,10 +4330,7 @@ def render_model_lab_outputs(result: dict | None) -> None:
     with dl_cols[1]:
         dataframe_download(
             "Download phase model",
-            parallel_series_dataframe({
-                "phase": model_result.get("model_phase", []),
-                "model_flux": model_result.get("model_flux", []),
-            }),
+            parallel_series_dataframe(phase_model_download),
             f"{prefix_name}_phase_model.txt",
             f"app_download_{prefix_name}_phase_model",
         )

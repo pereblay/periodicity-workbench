@@ -4,7 +4,7 @@ Periodicity Workbench is an interactive tool for exploring periodic signals in u
 
 The tool is intentionally exploratory. It can help identify candidate periods, aliases, harmonics, sampling-window artefacts, time-dependent period changes, and simple phenomenological models. It should not be treated as a replacement for a final publication-grade physical solution. The results are best used as a guide for deciding what deserves a more careful analysis.
 
-Current application version: **1.6.0**.
+Current application version: **1.7.0**.
 
 ## Version 1.6 Highlights
 
@@ -573,96 +573,178 @@ Optional teaching terms that add approximate double-wave ellipsoidal modulation,
 
 ## Bondi-Hoyle Accretion Model
 
-The Bondi-Hoyle block is a toy model for wind-fed X-ray binaries. It tests whether orbital changes in separation and relative velocity can produce the observed modulation.
+The Bondi-Hoyle block explores wind-fed accretion in a binary system. It can
+operate as a normalized teaching model or calculate a physical mass-accretion
+rate and luminosity. The app reports validity diagnostics because an analytic
+BHL prescription is not a hydrodynamic or radiative-transfer simulation.
 
-The qualitative accretion-rate scaling is
+### Orbital and wind geometry
 
-```text
-Mdot_acc ~ rho / v_rel^3
-```
-
-where `rho` is the local wind density and `v_rel` is the relative velocity between the compact object and the wind.
-
-The toy implementation uses
+The orbital separation is calculated from a Keplerian eccentric orbit. The
+compact object's velocity is resolved into radial and tangential components:
 
 ```text
-rho ~ 1 / (r^2 v_w)
-v_rel^2 ~ v_w^2 + v_orb^2
-y(t) = C + A [rho(r) / v_rel^3]
+r/a = (1 - e^2) / (1 + e cos(nu))
+v_orb,r / v_o = e sin(nu) / sqrt(1 - e^2)
+v_orb,t / v_o = (1 + e cos(nu)) / sqrt(1 - e^2)
 ```
 
-The separation `r` and orbital velocity are computed from a Keplerian orbit. The app can use either a dimensionless wind-speed ratio or a more pedagogical physical input based on terminal wind speed, masses, and stellar radius.
-
-When physical wind input is selected, the orbital scale is estimated from Kepler's third law:
+where `v_o = 2 pi a / P`. Since the stellar wind is radial, the relative
+velocity is
 
 ```text
-a = [G (M_donor + M_compact) (P_orb / 2 pi)^2]^(1/3)
-v_orb,scale = 2 pi a / P_orb
-v_inf / v_orb = v_inf / v_orb,scale
+v_rel^2 = (v_w - v_orb,r)^2 + v_orb,t^2
 ```
 
-The toy wind law then uses
+This vector expression is essential for eccentric orbits. The simpler
+`v_w^2 + v_orb^2` expression is recovered for a circular orbit, where the
+orbital velocity is tangential.
+
+The wind follows
 
 ```text
-v_w(r) = v_inf * (1 - R_donor / r)^beta
+v_w(r) = v_inf (1 - R_donor / r)^beta
+rho_w = Mdot_w / (4 pi r^2 v_w)
 ```
 
-implemented internally as a normalized ratio. In `v_inf` mode, `R_donor/a` is computed from the physical donor radius and the semi-major axis. In dimensionless `v_wind / v_orb` mode, `R_donor/a` is entered directly. The fitted parameters remain pedagogical and phenomenological unless physical masses, wind laws, inclination, and independent orbital constraints are available.
+The app rejects an orbit that intersects the donor rather than hiding it with
+an artificial minimum wind velocity.
 
-The donor spectral-type presets provide approximate stellar masses, radii, luminosities, and effective temperatures for quick classroom exploration. They include OB stars and representative A, F, G, K, and M stars. They are useful starting values, not a replacement for system-specific stellar calibrations.
+### Accretion formulations
+
+The classical pressure-aware Bondi-Hoyle rate is
+
+```text
+Mdot_BH = 4 pi G^2 M_compact^2 rho_w /
+          (v_rel^2 + c_s^2)^(3/2)
+```
+
+Setting `c_s=0` gives the pressure-free, high-Mach Hoyle-Lyttleton limit.
+
+The revised binary formulation includes the orientation of the accretion
+cylinder relative to the radial wind:
+
+```text
+R_acc = 2 G M_compact / (v_rel^2 + c_s^2)
+eta = 1/4 |1 - v_orb,r/v_w| (R_acc/r)^2
+```
+
+For a circular orbit it reduces to
+
+```text
+eta = [q / (1 + w^2)]^2
+q = M_compact / (M_donor + M_compact)
+w = v_w / v_o
+```
+
+This formulation is particularly useful for identifying the classical
+over-capture problem in slow winds. It is presented as a recent analytic
+binary prescription, not as a replacement for hydrodynamic simulation in all
+regimes.
+
+### Normalized and physical modes
+
+Normalized teaching mode median-normalizes the accretion curve and fits
+
+```text
+y(t) = C + A proxy_BHL(t)
+```
+
+Its amplitude and sign are phenomenological. A negative `A` triggers a warning
+because observed count rate may be dominated by absorption or reprocessing.
+
+Physical mode requires `v_inf`, component masses, donor radius, donor mass-loss
+rate, and an accretor luminosity prescription. It reports density, `Mdot_acc`,
+luminosity, and Eddington ratio. An Eddington cap is optional and is never
+applied silently.
+
+### Observable transfer
+
+Intrinsic accretion and observed count rate are kept separate. The optional
+attenuation layer uses
+
+```text
+F_observed = F_intrinsic exp[-tau_eff N_H,proxy(phase)]
+```
+
+This is a phenomenological wind-column proxy, not energy-dependent radiative
+transfer. A phase delay or causal exponential response can be applied after
+the intrinsic curve has been computed. It does not change `T0` or move the
+orbital geometry.
 
 ### Parameters
 
-**Orbital period**
-Period used to compute orbital phase.
-
-**T0 / periastron epoch**
-Reference epoch for periastron.
-
-**Display phase bins**
-Number of bins in the displayed folded profile.
+**Orbital period / T0**
+Set the orbital phase and periastron epoch. `T0` remains geometrical even when
+a response delay is fitted.
 
 **Initial/fixed eccentricity**
-Initial or fixed eccentricity.
+Initial or fixed eccentricity. The allowed upper bound is reduced
+automatically when necessary to keep the donor inside the periastron
+separation.
 
 **Wind speed input**
-Selects whether the model uses a dimensionless `v_wind / v_orb` ratio or physical wind parameters based on `v_inf`.
-
-**v_wind / v_orb**
-Ratio of wind speed to characteristic orbital speed. This is the original dimensionless toy-model parameter.
+Choose terminal speed `v_inf` in km/s or the dimensionless terminal ratio
+`w_inf = v_inf/v_o`. `w_inf` is not the instantaneous local wind/orbital speed
+ratio.
 
 **Donor radius / a**
-Dimensionless donor radius used in the beta-law wind acceleration term when the wind speed is entered as `v_wind / v_orb`.
+Dimensionless wind-launching radius in terminal-ratio mode.
 
-**v_inf [km/s]**
-Terminal wind speed used to derive an effective `v_wind / v_orb` ratio.
+**Sound speed**
+Entered in km/s for physical wind input or as `c_s/v_o` in dimensionless mode.
+The displayed Mach number uses the local relative velocity.
 
-**Donor spectral type / Luminosity class**
-Optional preset for typical donor mass, radius, luminosity, and effective temperature. The available presets cover OB and representative A, F, G, K, and M stars for luminosity classes V, III, and I. Choose `Manual` to edit mass and radius directly.
+**Accretion formulation**
+Selects classical pressure-aware BHL or the revised binary geometric
+efficiency.
 
-**Donor mass [Msun]**
-Mass of the donor star used in Kepler's third law.
+**Calculation mode**
+Selects a normalized teaching curve or physical mass rate and luminosity.
+Physical mode requires `v_inf` input.
 
-**Compact mass [Msun]**
-Mass of the compact object, usually around 1.4 Msun for a neutron star.
+**Mass-loss rate / compact radius / radiative efficiency**
+Set the physical density, accretion rate, and luminosity normalization.
 
-**Donor radius [Rsun]**
-Radius used in the simple beta-law wind acceleration term.
+**Response model**
+Choose no response, a pure phase delay, or a causal exponential response.
 
-**Wind beta**
-Controls the simple wind acceleration law used in the toy model.
+**Effective attenuation tau**
+Controls the optional wind-column attenuation proxy.
 
-**Fit eccentricity**
-Optimizes eccentricity.
+**Residual bootstrap iterations**
+Estimates confidence intervals by refitting residual-resampled light curves.
+Use zero for fast exploration and increase it for final analysis.
 
-**Fit wind speed**
-Optimizes the wind-speed ratio in the dimensionless mode. It is disabled in `v_inf` mode so that the user can explore how physical input parameters change the model.
+### Validity dashboard
 
-**Fit phase lag**
-Allows a phase offset between the simple periastron reference and the observed modulation.
+The model reports:
 
-**Show full data set with model**
-Displays the fitted model over the full time span.
+- minimum and maximum Mach number;
+- local and terminal wind ratios;
+- maximum `R_acc/a` and `R_acc/r`;
+- maximum capture efficiency;
+- minimum separation in donor-radius units;
+- periastron Roche-lobe filling factor;
+- parameter-bound and negative-scale warnings;
+- comparison with constant, sinusoidal, and two-harmonic models.
+
+Status is `VALID`, `CAUTION`, or `OUTSIDE ASSUMPTIONS`. Slow winds, transonic
+flow, a large accretion radius, Roche-lobe filling, or efficiency above unity
+indicate that gradients, turbulence, stream accretion, or transient-disc
+physics may dominate.
+
+### Interpretation and literature
+
+The analytic foundation and its limitations follow the Bondi-Hoyle-Lyttleton
+review by Edgar. The revised geometric efficiency follows Tejeda and Toala.
+The gradient/turbulence warnings are motivated by the supergiant X-ray binary
+simulations of Xu and Stone. The intrinsic-versus-observed distinction is
+important in systems such as Vela X-1, where obscuration and transient
+disc-like structures can change the observed count rate.
+
+Relativistic shock-cone and QPO calculations around Kerr, Horndeski, or
+Lee-Wick black holes are outside this Newtonian wind-fed binary module.
 
 ## X-ray Pulsation Timing
 
