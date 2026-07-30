@@ -4,9 +4,21 @@ Periodicity Workbench is an interactive tool for exploring periodic signals in u
 
 The tool is intentionally exploratory. It can help identify candidate periods, aliases, harmonics, sampling-window artefacts, time-dependent period changes, and simple phenomenological models. It should not be treated as a replacement for a final publication-grade physical solution. The results are best used as a guide for deciding what deserves a more careful analysis.
 
-Current application version: **1.7.0**.
+Current application version: **1.8.0**.
 
-## Version 1.6 Highlights
+## Version 1.8 Student Workflow and Reporting Highlights
+
+Version 1.8 introduces a guided evidence notebook for the minimum student workflow. It tracks five required stages: inspection of the uploaded light curve, reviewed bibliography, frequency analysis and an explicit periodicity decision, conditional interpretation of the folded profile, and a final assessment compared with the literature.
+
+The report builder now has a fixed core workflow. Incomplete evidence produces a clearly labelled draft and a list of pending stages; completing the five stages produces a final report. Iterative Prewhitening, Period Tomography, and one justified Model Laboratory model are voluntary and may be selected in any combination, while `None` excludes the other choices. Their report controls become available only after the corresponding analyses exist.
+
+Every report page carries the 150-pixel VIU logo and the ruled `12MAST AG2` / `Student name - Course` footer. All analysis-step expanders in the left sidebar start closed so the student can open the workflow progressively.
+
+## Version 1.7 Scientific Model Highlights
+
+Version 1.7 expands the Bondi-Hoyle laboratory with full vector wind/orbit relative velocity for eccentric systems, classical pressure-aware and revised-binary formulations, normalized and physical accretion modes, Mach-number and accretion-radius diagnostics, Roche-lobe and capture-efficiency checks, optional attenuation and response-delay experiments, parameter covariance, residual-bootstrap intervals, model comparison, and structured validity warnings shared by the interface and report.
+
+## Version 1.6 Timing Highlights
 
 Version 1.6 adds timing-provenance checks and a substantial expansion of the X-ray pulse-timing laboratory. It can inspect FITS barycentric metadata, apply a clearly labelled geocentric approximation when possible, estimate epoch-folding significance and period uncertainty, derive candidate template TOAs, compare F0 and F0+F1 spin ephemerides, and explore circular or Keplerian Roemer-delay models. Pulsed fractions can include a supplied background and Monte Carlo intervals.
 
@@ -24,31 +36,38 @@ PDF reports now include the 150-pixel VIU logo on every generated page and a rul
 8. Use prewhitening to remove selected periodicities and search for residual signals.
 9. Use Period Tomography to inspect whether the periodicity changes with time.
 10. Use Model Laboratory for more specific phenomenological or educational fits.
-11. Save evidence notes and generate a PDF report with the selected analysis sections.
+11. Complete the five-stage student evidence notebook and generate the PDF report. Missing evidence is allowed only as a clearly marked draft.
 
 ## Minimum Student Workflow
 
-This is the minimum recommended workflow for a student report. It is intended to encourage a progressive analysis: first inspect the data with as few assumptions as possible, then refine the search, estimate uncertainties, and finally compare the result with the literature.
+This is the minimum required workflow for a student report. The evidence notebook appears below the analysis results and tracks completion of the five stages.
 
-1. **Load the light curve without error weighting.**
-   Upload the ASCII or FITS light curve, select the time and flux/count-rate/magnitude columns, and disable the error column for the first pass. This gives an initial unweighted view of the data and avoids over-interpreting uncertain or problematic error estimates before inspecting the light curve.
+1. **Upload and inspect the light curve.**
+   Upload the ASCII or FITS light curve, select the relevant columns, and inspect the original data before interpreting a periodogram. Comment on the appearance of the curve: observing coverage, gaps, scatter, trends, outliers, changes in amplitude, and possible instrumental features.
 
-2. **Make a first inspection of possible periodicities.**
-   Run the frequency search with the suggested or default frequency range. Inspect the Lomb-Scargle periodogram, the sampling window, and the automatically detected candidate periods. At this stage the goal is not to choose a final solution, but to identify which peaks deserve closer attention and which may be related to the observing cadence.
+2. **Search and review the bibliography.**
+   Use **Bibliographic Search** from the Input panel and consult ADS, arXiv, or other appropriate sources. Record the useful references and add a concise review of each relevant published result. A list of links without commentary is not sufficient evidence.
 
-3. **Refine the frequency range and enable uncertainty estimates.**
-   Adjust the minimum and maximum frequencies to cover the scientifically relevant period range. Then enable the error column, if a reliable uncertainty column is available, and run the uncertainty calculation. The student should report the candidate period, its uncertainty, the corresponding frequency, the false-alarm probability, and whether the peak is likely intrinsic or related to the sampling window.
+3. **Analyse frequencies and decide whether periodicity is measurable.**
+   Inspect the Lomb-Scargle periodogram, sampling window, false-alarm probabilities, aliases, baseline, and signal-to-noise. Select and justify a frequency only when the data support it. The notebook requires an explicit conclusion: reliable periodicity, no reliable periodicity, or inconclusive. Discuss possible harmonics and distinguish them from independent signals.
 
-4. **Investigate the folded profile.**
-   Fold the light curve using the most relevant candidate period and inspect the profile over two cycles. Try different bin numbers when useful. Check whether the folded profile is coherent and whether the phase of maxima or minima is physically meaningful.
+4. **Study the folded profile when periodicity is reliable.**
+   Fold the light curve with the selected period and comment on coherence, phase-dependent structure, maxima and minima, binning, harmonics, and possible `P` versus `2P` ambiguity. This stage is required only when the student concludes that a reliable periodicity can be determined. For a justified non-periodic or inconclusive result it is marked not required.
 
-5. **Test whether harmonics improve the folded fit.**
-   Compare a simple sinusoidal fit with fits that include harmonics or additional selected periods. The student should comment on whether the extra terms genuinely improve the profile or merely add unnecessary flexibility.
+5. **Write the final assessment and compare it with the literature.**
+   Summarize what was done, state the limitations of the result, and compare the final conclusion with the reviewed publications. Explain agreement, disagreement, or why the available data cannot resolve the question.
 
-6. **Fill in the evidence boxes with literature context.**
-   Use the **Save evidences** sections to record the adopted period, uncertainty, additional tested periods, and a short comparison with published values or expectations from the literature. A good report should explain whether the result agrees with previous work, disagrees with it, or remains ambiguous because of aliases, sampling artefacts, weak signal-to-noise, or limited time coverage.
+The final report always includes this core workflow. If any required evidence is missing, the interface and PDF identify the report as a draft and list the pending stages.
 
-The minimum final report should therefore include the original light curve, the Lomb-Scargle periodogram, the sampling-window interpretation, the folded profile, the adopted period and uncertainty, and a short literature-based discussion.
+### Voluntary Extension
+
+The student may additionally:
+
+- use Iterative Prewhitening to subtract one or more justified signals and inspect the residual periodogram;
+- use Period Tomography to look for stable, drifting, intermittent, or otherwise time-dependent behaviour; and/or
+- apply one Model Laboratory model and justify why that single model is appropriate for the observed data.
+
+These sections are voluntary and can be selected in any combination. Selecting `None` excludes all three; selecting any analysis removes `None`. The report controls enable each section only after the corresponding analysis exists. A Model Laboratory report includes only the currently fitted model, not a collection of unrelated model trials.
 
 ## Input
 
@@ -893,31 +912,29 @@ Displays the pulse model over the full data set.
 
 Several result blocks include download buttons for the plotted data. These export plain text tables with the numerical values used in the displayed figures, so the same periodograms, sampling-window curves, folded profiles, model curves, epoch-folding searches, or pulse-arrival diagnostics can be inspected outside the app.
 
-### Save Evidences
+### Student Evidence Notebook
 
-The **Save evidences** expanders are intended for student reports. They keep short notes linked to the current analysis state and can be included in the generated PDF report.
+The notebook groups the required evidence into the five workflow stages described above. A progress indicator and status table show which stages are complete and what evidence is still missing. Closing an expander does not erase its contents; the notes are cleared only when the workspace is reset.
 
-The frequency-search evidence block records the adopted period, its uncertainty, optional extra periods, and comments comparing the detected period or periods with the literature.
+For a reliable periodicity, the frequency stage requires a selected frequency or period, a reasoned selection, and harmonic analysis. The folded-profile stage then becomes mandatory. For a justified non-periodic or inconclusive conclusion, the folded stage is automatically treated as not required.
 
-The prewhitening evidence block records the periods used in the prewhitening chain and comments on whether those removals are justified.
-
-The Period Tomography evidence block records the window width, window step, and comments on whether the tomogram supports a stable, drifting, intermittent, or ambiguous signal.
-
-The Model Laboratory evidence block records comments on the selected model and comparison with published interpretations or expected physical behavior.
-
-Closing an evidence expander does not erase its contents. The notes are cleared only when the workspace is reset.
+The voluntary block uses a multiple-selection control for `None`, Iterative Prewhitening, Tomography, and Model Laboratory. It records the prewhitening periods and residual interpretation, tomography settings and interpretation, and/or the justification for one currently fitted Model Laboratory model.
 
 ### PDF Report Builder
 
-The report panel creates a compact PDF report from the current workspace. It can include:
+The report panel creates a compact PDF report from the current workspace. Its required core always includes:
 
 - the input data overview and original light curve,
+- workflow completion and pending-evidence status,
+- initial light-curve commentary,
+- bibliographic reviews,
 - the Lomb-Scargle and folded-profile plots,
 - the folded-fit equation and detected-period table,
-- frequency-search evidence entered by the student,
-- iterative-prewhitening plots, tables, and evidence,
-- the Period Tomography map and evidence,
-- Model Laboratory plots, formulae, summary text, pedagogical hints, and evidence.
+- the periodicity decision, selected frequency or period, and harmonic analysis,
+- the conditional folded-profile interpretation, and
+- the final assessment and comparison with the bibliography.
+
+Iterative Prewhitening, Period Tomography, and one currently fitted Model Laboratory model are voluntary sections. They may be combined, and their report checkboxes remain unavailable until the corresponding result exists.
 
 The report metadata fields are:
 
@@ -937,7 +954,7 @@ Name of the generated PDF file.
 Optional PDF file. If supplied, the newly generated report is appended after the pages of the uploaded PDF. This is useful when a student wants to build a multi-part report over several analysis sessions.
 
 **Sections to include**
-Checkboxes controlling whether the report includes Frequency Search, Iterative Prewhitening, Period Tomography, and Model Laboratory sections. Empty or unavailable sections are skipped.
+The required core-workflow checkbox is fixed on. Separate voluntary controls add Iterative Prewhitening, Period Tomography, and one Model Laboratory model. When required evidence is missing, the download is labelled as a draft; when all five stages are complete, it is labelled as a final report.
 
 The PDF report is a teaching/reporting aid. It preserves the main plots, fitted formulae, tables, and evidence text, but it should still be checked by the student before submission.
 

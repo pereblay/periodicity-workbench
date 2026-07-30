@@ -2,9 +2,21 @@
 
 Streamlit version of the local Periodicity Workbench app.
 
-Current version: `1.7.0`.
+Current version: `1.8.0`.
 
-## What's New in 1.7
+## What's New in 1.8
+
+- A five-stage student evidence notebook covering light-curve inspection, bibliography, frequency analysis, conditional folded-profile interpretation, and final literature comparison.
+- Explicit conclusions for reliable periodicity, no reliable periodicity, or an inconclusive result.
+- Required justification of the selected frequency and analysis of aliases, harmonics, and `P` versus `2P` ambiguity.
+- Completion tracking for the required workflow, with the folded-profile stage required only after a reliable-periodicity conclusion.
+- Multiple voluntary selections for Iterative Prewhitening, Period Tomography, and one justified Model Laboratory model; `None` remains mutually exclusive.
+- A fixed core PDF report that distinguishes incomplete drafts from final reports and lists missing evidence.
+- Voluntary report sections enabled only after their corresponding analyses exist.
+- Reliable VIU branding and `12MAST AG2` / `Student - Course` footer decoration on every generated PDF page.
+- All analysis-step expanders start closed for a compact, progressive workflow.
+
+## Version 1.7 Scientific Model Highlights
 
 - Full vector wind/orbit relative velocity for eccentric systems.
 - Classical pressure-aware BHL and revised binary BHL formulations.
@@ -36,19 +48,24 @@ It supports:
 - A binary interpretation assistant for folded-profile minima, depth ratios, and half-period ambiguity checks.
 - Stellar spectral-type presets for toy binary and wind-accretion models, including OB and A/F/G/K/M representative stars.
 - Download buttons for the plotted data tables.
-- Evidence boxes for student notes and literature comparisons.
-- Compact branded PDF report generation with selectable sections, per-page header/footer metadata, and optional append-to-existing-PDF support.
+- A guided student evidence notebook with completion tracking for the required workflow.
+- Compact branded PDF report generation with a fixed core workflow, clearly labelled voluntary sections, draft/completion status, per-page header/footer metadata, and optional append-to-existing-PDF support.
 
 ## Student Report Workflow
 
-The built-in help includes a minimum student workflow:
+The app now presents a five-stage evidence notebook after an analysis:
 
-1. Load the light curve without error weighting for the first inspection.
-2. Run an initial frequency search and inspect the Lomb-Scargle periodogram, sampling window, and folded profile.
-3. Refine the frequency range and then enable uncertainty estimates.
-4. Investigate the folded profile and test whether harmonics improve the fit.
-5. Fill in the evidence boxes with adopted periods, uncertainties, and literature comparison.
-6. Generate a PDF report including the selected analysis sections.
+1. Upload and inspect the light curve, then comment on its appearance, coverage, gaps, scatter, trends, and outliers.
+2. Search the bibliography and record the relevant references with short reviews.
+3. Analyse the frequency spectrum, decide explicitly whether a reliable periodicity can be determined, justify the selected frequency, and discuss possible harmonics and aliases.
+4. If a reliable periodicity is found, study the folded profile and discuss its shape, coherence, harmonics, and possible `P` versus `2P` ambiguity.
+5. Write a final assessment and compare the conclusion with the bibliography.
+
+The notebook displays the completion state of every required stage. A PDF can still be downloaded when evidence is missing, but it is clearly labelled as a draft and lists the pending stages.
+
+As voluntary extensions, the student may select any combination of Iterative Prewhitening, Period Tomography, and one Model Laboratory model. `None` is mutually exclusive with those selections. Only one laboratory model is reported, and the student must justify why it is applicable. Each voluntary report section remains unavailable until its corresponding analysis exists.
+
+All analysis-step expanders in the left sidebar start closed, giving the student a compact overview of the workflow before opening the required step.
 
 ## Model Laboratory Notes
 
