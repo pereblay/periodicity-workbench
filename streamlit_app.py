@@ -32,14 +32,14 @@ from app import BHL_DONOR_PRESETS, advanced_time_frequency_map, bhl_donor_preset
 try:
     APP_VERSION = (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip()
 except OSError:
-    APP_VERSION = "1.7.0"
+    APP_VERSION = "1.8.0"
 
 REPORT_LOGO_PATH = Path(__file__).resolve().parent / "static" / "report_logo.png"
 REPORT_LOGO_WIDTH_PX = 150
 
 
 st.set_page_config(
-    page_title="Periodicity Workbench",
+    page_title=f"Periodicity Workbench {APP_VERSION}",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -958,64 +958,223 @@ def evidence_period_rows(prefix: str, key: str) -> list[dict[str, str]]:
     return rows
 
 
-def render_frequency_evidence(prefix: str, result: dict | None) -> None:
-    with st.expander("Save evidences", expanded=False):
-        st.caption("These notes are kept while the widget is closed and can be included in the PDF report.")
-        cols = st.columns(2)
-        default_period = "" if not result or result.get("primary_period") is None else f"{float(result['primary_period']):.8g}"
-        if f"evidence_frequency_period" not in st.session_state and default_period:
-            st.session_state["evidence_frequency_period"] = default_period
-        cols[0].text_input("Period", key="evidence_frequency_period")
-        cols[1].text_input("Error", key="evidence_frequency_error")
-        count = int(st.session_state.get("evidence_frequency_extra_count", 0))
-        for index in range(count):
-            extra_cols = st.columns(2)
-            extra_cols[0].text_input(f"Extra period {index + 1}", key=f"evidence_frequency_extra_period_{index}")
-            extra_cols[1].text_input(f"Extra error {index + 1}", key=f"evidence_frequency_extra_error_{index}")
-        if st.button("Add extra period", key="evidence_frequency_add_period"):
-            st.session_state["evidence_frequency_extra_count"] = count + 1
-            st.rerun()
-        st.text_area(
-            "Comments on period(s) found and comparison to literature:",
-            key="evidence_frequency_comments",
-            height=130,
+PERIODICITY_DECISIONS = [
+    "Not assessed yet",
+    "A reliable periodicity can be determined",
+    "No reliable periodicity can be determined",
+    "The result is inconclusive",
+]
+
+VOLUNTARY_OPTIONS = [
+    "None",
+    "Iterative prewhitening",
+    "Tomography",
+    "Model Laboratory",
+]
+
+
+def evidence_text(key: str, fallback_key: str | None = None) -> str:
+    value = str(st.session_state.get(key, "") or "").strip()
+    if not value and fallback_key:
+        value = str(st.session_state.get(fallback_key, "") or "").strip()
+    return value
+
+
+def student_workflow_status() -> list[dict[str, object]]:
+    decision = str(st.session_state.get("evidence_periodicity_decision", PERIODICITY_DECISIONS[0]))
+    periodic = decision == PERIODICITY_DECISIONS[1]
+    frequency_complete = (
+        decision != PERIODICITY_DECISIONS[0]
+        and bool(evidence_text("evidence_frequency_reason", "evidence_frequency_comments"))
+        and bool(evidence_text("evidence_frequency_harmonics"))
+    )
+    if periodic:
+        frequency_complete = frequency_complete and bool(
+            evidence_text("evidence_frequency_selected") or evidence_text("evidence_frequency_period")
         )
-
-
-def render_prewhitening_evidence() -> None:
-    with st.expander("Save evidences", expanded=False):
-        chain = st.session_state.get("app_prewhitening_periods", [])
-        if "evidence_prewhitening_periods" not in st.session_state and chain:
-            st.session_state["evidence_prewhitening_periods"] = ", ".join(f"{float(period):.8g}" for period in chain)
-        st.text_area("Periods used:", key="evidence_prewhitening_periods", height=90)
-        st.text_area(
-            "Comments on used periods and comparison to literature:",
-            key="evidence_prewhitening_comments",
-            height=130,
+    folded_complete = decision in PERIODICITY_DECISIONS[2:]
+    folded_detail = (
+        "Not required after a justified non-periodic or inconclusive result"
+        if folded_complete
+        else "Complete the periodicity decision before assessing this stage"
+    )
+    if periodic:
+        folded_complete = bool(evidence_text("evidence_folded_comments")) and bool(
+            evidence_text("evidence_folded_harmonics")
         )
+        folded_detail = "Comment on the folded profile and its possible harmonics"
+    rows = [
+        {
+            "step": "1. Light-curve inspection",
+            "complete": bool(evidence_text("evidence_lightcurve_appearance")),
+            "detail": "Describe the appearance, coverage, gaps, scatter, trends, and outliers",
+        },
+        {
+            "step": "2. Bibliographic review",
+            "complete": bool(evidence_text("evidence_bibliography_reviews")),
+            "detail": "Record relevant references and concise reviews",
+        },
+        {
+            "step": "3. Frequency analysis",
+            "complete": frequency_complete,
+            "detail": "Decide whether periodicity is measurable; justify the selected frequency and harmonics",
+        },
+        {"step": "4. Folded profile", "complete": folded_complete, "detail": folded_detail},
+        {
+            "step": "5. Final assessment",
+            "complete": bool(evidence_text("evidence_final_review"))
+            and bool(evidence_text("evidence_final_literature_comparison")),
+            "detail": "Summarize the work and compare the conclusion with the literature",
+        },
+    ]
+    return rows
 
 
-def render_tomography_evidence(prefix: str) -> None:
-    with st.expander("Save evidences", expanded=False):
-        cols = st.columns(2)
-        if "evidence_tomography_window_width" not in st.session_state:
-            st.session_state["evidence_tomography_window_width"] = str(st.session_state.get(f"{prefix}_advanced_width", ""))
-        if "evidence_tomography_window_step" not in st.session_state:
-            st.session_state["evidence_tomography_window_step"] = str(st.session_state.get(f"{prefix}_advanced_step", ""))
-        cols[0].text_input("Window width", key="evidence_tomography_window_width")
-        cols[1].text_input("Window step", key="evidence_tomography_window_step")
-        st.text_area("Comments on tomography results:", key="evidence_tomography_comments", height=130)
+def normalize_voluntary_selections() -> None:
+    selected = list(st.session_state.get("evidence_optional_selections", ["None"]))
+    previous = set(st.session_state.get("_evidence_optional_previous", ["None"]))
+    if not selected:
+        selected = ["None"]
+    elif "None" in selected and len(selected) > 1:
+        selected = ["None"] if "None" not in previous else [item for item in selected if item != "None"]
+    st.session_state["evidence_optional_selections"] = selected
+    st.session_state["_evidence_optional_previous"] = list(selected)
+    st.session_state["report_include_prewhitening"] = "Iterative prewhitening" in selected
+    st.session_state["report_include_tomography"] = "Tomography" in selected
+    st.session_state["report_include_model_lab"] = "Model Laboratory" in selected
 
 
-def render_model_lab_evidence(model_result: dict | None) -> None:
-    with st.expander("Save evidences", expanded=False):
-        family = str((model_result or {}).get("family", "selected model")).replace("_", " ")
-        st.caption(f"Evidence for: {family}")
+def render_student_workflow_notebook(result: dict | None) -> None:
+    if not result:
+        return
+    if "evidence_frequency_period" not in st.session_state and result.get("primary_period") is not None:
+        st.session_state["evidence_frequency_period"] = f"{float(result['primary_period']):.8g}"
+    if "evidence_frequency_selected" not in st.session_state and result.get("primary_period"):
+        st.session_state["evidence_frequency_selected"] = f"{1.0 / float(result['primary_period']):.8g}"
+    chain = st.session_state.get("app_prewhitening_periods", [])
+    if "evidence_prewhitening_periods" not in st.session_state and chain:
+        st.session_state["evidence_prewhitening_periods"] = ", ".join(f"{float(period):.8g}" for period in chain)
+    if "evidence_tomography_window_width" not in st.session_state:
+        st.session_state["evidence_tomography_window_width"] = str(st.session_state.get("l1_advanced_width", ""))
+    if "evidence_tomography_window_step" not in st.session_state:
+        st.session_state["evidence_tomography_window_step"] = str(st.session_state.get("l1_advanced_step", ""))
+    if "evidence_optional_selections" not in st.session_state:
+        legacy_choice = str(st.session_state.get("evidence_optional_choice", "None"))
+        migrated = []
+        if "Tomography" in legacy_choice:
+            migrated.append("Tomography")
+        if "model" in legacy_choice.lower():
+            migrated.append("Model Laboratory")
+        st.session_state["evidence_optional_selections"] = migrated or ["None"]
+        st.session_state["_evidence_optional_previous"] = list(st.session_state["evidence_optional_selections"])
+
+    st.divider()
+    st.subheader("Student workflow and evidence notebook")
+    st.caption(
+        "Complete the five required stages in order. Notes persist while the app remains open "
+        "and are incorporated into the generated PDF."
+    )
+    status = student_workflow_status()
+    completed = sum(bool(row["complete"]) for row in status)
+    st.progress(completed / len(status), text=f"Required workflow: {completed}/{len(status)} stages complete")
+    st.dataframe(
+        pd.DataFrame(
+            [{"Status": "Complete" if row["complete"] else "Pending", "Stage": row["step"], "Evidence required": row["detail"]} for row in status]
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("1. Upload and inspect the light curve — required", expanded=not status[0]["complete"]):
         st.text_area(
-            "Comments and comparison to literature:",
-            key="evidence_model_lab_comments",
-            height=150,
+            "Comment on the appearance of the light curve",
+            key="evidence_lightcurve_appearance",
+            height=140,
+            placeholder="Coverage, gaps, variability, scatter, trends, outliers, instrumental features...",
         )
+    with st.expander("2. Bibliographic search — required", expanded=not status[1]["complete"]):
+        st.caption("Use the Bibliographic Search button in the Input panel, then record the useful references here.")
+        st.text_area(
+            "Relevant references and short reviews",
+            key="evidence_bibliography_reviews",
+            height=170,
+            placeholder="Citation or URL — relevant published period/result — why it matters for this analysis",
+        )
+    with st.expander("3. Frequency analysis and periodicity decision — required", expanded=not status[2]["complete"]):
+        st.selectbox("Conclusion about periodicity", PERIODICITY_DECISIONS, key="evidence_periodicity_decision")
+        units = result.get("frequency_unit", "1/d")
+        period_unit = result.get("period_unit", "d")
+        cols = st.columns(3)
+        cols[0].text_input(f"Selected frequency ({units})", key="evidence_frequency_selected")
+        cols[1].text_input(f"Equivalent period ({period_unit})", key="evidence_frequency_period")
+        cols[2].text_input(f"Period uncertainty ({period_unit})", key="evidence_frequency_error")
+        st.text_area(
+            "Justification for the decision and selected frequency",
+            key="evidence_frequency_reason",
+            height=135,
+            placeholder="Significance, sampling window, aliases, signal-to-noise, baseline, peak width...",
+        )
+        st.text_area(
+            "Analysis of possible harmonics",
+            key="evidence_frequency_harmonics",
+            height=120,
+            placeholder="Which peaks are compatible with f, 2f, 3f or subharmonics? Could the apparent period be P/2?",
+        )
+    decision = str(st.session_state.get("evidence_periodicity_decision", PERIODICITY_DECISIONS[0]))
+    periodic = decision == PERIODICITY_DECISIONS[1]
+    folded_title = "4. Folded-period study — required when periodicity is reliable"
+    with st.expander(folded_title, expanded=periodic and not status[3]["complete"]):
+        if decision == PERIODICITY_DECISIONS[0]:
+            st.warning("This stage remains pending until the periodicity conclusion is completed.")
+        elif not periodic:
+            st.info("This stage is not required for the current non-periodic or inconclusive conclusion. You may still add exploratory notes.")
+        st.text_area("Interpretation of the folded profile", key="evidence_folded_comments", height=135)
+        st.text_area(
+            "Harmonics and ambiguities in the folded profile",
+            key="evidence_folded_harmonics",
+            height=120,
+            placeholder="Shape, coherence, maxima/minima, two-cycle symmetry, P versus 2P ambiguity...",
+        )
+    with st.expander("5. Final assessment and literature comparison — required", expanded=not status[4]["complete"]):
+        st.text_area("Final review of the work", key="evidence_final_review", height=140)
+        st.text_area(
+            "Comparison with the bibliography",
+            key="evidence_final_literature_comparison",
+            height=140,
+            placeholder="Agreement, disagreement, limitations, and what would be needed to resolve ambiguities",
+        )
+    with st.expander("Voluntary extension — additional analyses", expanded=False):
+        st.caption(
+            "Select one or several analyses. ‘None’ is exclusive. "
+            "In Model Laboratory, report only one model and justify why it is applicable."
+        )
+        optional_selections = st.multiselect(
+            "Voluntary work included",
+            VOLUNTARY_OPTIONS,
+            key="evidence_optional_selections",
+            on_change=normalize_voluntary_selections,
+        )
+        if "Iterative prewhitening" in optional_selections:
+            st.text_area("Periods used in iterative prewhitening", key="evidence_prewhitening_periods", height=90)
+            st.text_area(
+                "Why prewhitening was used and what remains after each subtraction",
+                key="evidence_prewhitening_comments",
+                height=130,
+            )
+        if "Tomography" in optional_selections:
+            cols = st.columns(2)
+            cols[0].text_input("Tomography window width", key="evidence_tomography_window_width")
+            cols[1].text_input("Tomography window step", key="evidence_tomography_window_step")
+            st.text_area("Observed time variations and interpretation", key="evidence_tomography_comments", height=125)
+        if "Model Laboratory" in optional_selections:
+            model_result = st.session_state.get("app_model_lab_result")
+            family = str((model_result or {}).get("family", "No fitted model yet")).replace("_", " ")
+            st.text_input("Single model reported", value=family, disabled=True)
+            st.text_area(
+                "Why this model is applicable and what its result means",
+                key="evidence_model_lab_comments",
+                height=140,
+            )
 
 
 def dataframe_to_lines(df: pd.DataFrame, max_rows: int = 12) -> list[str]:
@@ -1038,11 +1197,19 @@ def report_metadata() -> dict[str, str]:
 
 def report_selected_sections() -> dict[str, bool]:
     return {
-        "frequency": bool(st.session_state.get("report_include_frequency", True)),
+        "frequency": True,
         "prewhitening": bool(st.session_state.get("report_include_prewhitening", True)),
-        "tomography": bool(st.session_state.get("report_include_tomography", True)),
-        "model_lab": bool(st.session_state.get("report_include_model_lab", True)),
+        "tomography": bool(st.session_state.get("report_include_tomography", False)),
+        "model_lab": bool(st.session_state.get("report_include_model_lab", False)),
     }
+
+
+def workflow_report_lines() -> list[str]:
+    lines = []
+    for row in student_workflow_status():
+        marker = "COMPLETE" if row["complete"] else "PENDING"
+        lines.append(f"[{marker}] {row['step']}: {row['detail']}")
+    return lines
 
 
 def add_wrapped_text(ax, lines: list[str] | str, y_start: float = 0.94, size: int = 10, width: int = 95) -> None:
@@ -1293,12 +1460,15 @@ class CompactPdfReport:
                 resized = source.resize((REPORT_LOGO_WIDTH_PX, logo_height), Image.Resampling.LANCZOS)
                 self.logo = np.asarray(resized)
         self.fig: Figure | None = None
+        self.page_decorated = False
         self.y = 0.90
         self.page_has_content = False
         self.new_page()
 
     def decorate_page(self) -> None:
         assert self.fig is not None
+        if self.page_decorated:
+            return
         if self.logo is not None:
             page_width_px = int(round(self.fig.get_figwidth() * self.fig.dpi))
             page_height_px = int(round(self.fig.get_figheight() * self.fig.dpi))
@@ -1325,6 +1495,7 @@ class CompactPdfReport:
             ha="right",
             va="center",
         )
+        self.page_decorated = True
 
     def save_page(self) -> None:
         if self.fig is not None and self.page_has_content:
@@ -1334,8 +1505,10 @@ class CompactPdfReport:
     def new_page(self) -> None:
         self.save_page()
         self.fig = Figure(figsize=(8.27, 11.69), dpi=100)
+        self.page_decorated = False
         self.y = 0.90
         self.page_has_content = False
+        self.decorate_page()
 
     def finish(self) -> None:
         self.save_page()
@@ -1891,9 +2064,24 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 0.31,
                 lambda fig, x, y, w, h: draw_input_overview(fig, x, y, w, h, result),
             )
+            report.text_block(
+                "Student workflow completion",
+                "\n".join(workflow_report_lines()),
+                min_height=0.20,
+            )
+            report.text_block(
+                "1. Initial light-curve inspection",
+                evidence_text("evidence_lightcurve_appearance") or "PENDING — no student commentary was provided.",
+                min_height=0.16,
+            )
+            report.text_block(
+                "2. Bibliographic search and relevant reviews",
+                evidence_text("evidence_bibliography_reviews") or "PENDING — no bibliography review was provided.",
+                min_height=0.18,
+            )
         if result and sections["frequency"]:
             report.block(
-                "Frequency search plots",
+                "3. Frequency search plots",
                 0.31,
                 lambda fig, x, y, w, h: draw_frequency_summary_plot(fig, x, y, w, h, result),
             )
@@ -1936,14 +2124,45 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 max_rows=8,
             )
             period_lines = evidence_period_rows("l1", "frequency")
-            evidence_text = (
-                f"Periods reported by the student: {period_lines or 'Not provided.'}\n"
-                f"{st.session_state.get('evidence_frequency_comments', 'No comments provided.')}"
-            )
-            report.text_block("Frequency-search evidence", evidence_text, min_height=0.14)
+            period_summary = "; ".join(
+                f"{row['period']}" + (f" +/- {row['error']}" if row.get("error") else "")
+                for row in period_lines
+            ) or "Not provided"
+            decision = str(st.session_state.get("evidence_periodicity_decision", PERIODICITY_DECISIONS[0]))
+            selected_frequency = evidence_text("evidence_frequency_selected") or "Not provided"
+            frequency_reason = evidence_text("evidence_frequency_reason", "evidence_frequency_comments") or "PENDING"
+            harmonic_analysis = evidence_text("evidence_frequency_harmonics") or "PENDING"
+            frequency_evidence = "\n".join([
+                f"Periodicity conclusion: {decision}",
+                f"Selected frequency: {selected_frequency}",
+                f"Adopted period(s): {period_summary}",
+                f"Decision and selection rationale: {frequency_reason}",
+                f"Possible harmonics: {harmonic_analysis}",
+            ])
+            report.text_block("3. Frequency-analysis evidence", frequency_evidence, min_height=0.24)
+            periodic = decision == PERIODICITY_DECISIONS[1]
+            if periodic:
+                folded_evidence = "\n".join([
+                    f"Folded-profile interpretation: {evidence_text('evidence_folded_comments') or 'PENDING'}",
+                    f"Harmonics and ambiguities: {evidence_text('evidence_folded_harmonics') or 'PENDING'}",
+                ])
+            elif decision in PERIODICITY_DECISIONS[2:]:
+                folded_evidence = (
+                    f"Not required for the current conclusion: {decision}. "
+                    "Any exploratory notes entered by the student follow.\n"
+                    f"Profile: {evidence_text('evidence_folded_comments') or 'None'}\n"
+                    f"Harmonics: {evidence_text('evidence_folded_harmonics') or 'None'}"
+                )
+            else:
+                folded_evidence = (
+                    "PENDING - the student must first decide whether a reliable periodicity can be determined.\n"
+                    f"Exploratory profile notes: {evidence_text('evidence_folded_comments') or 'None'}\n"
+                    f"Exploratory harmonic notes: {evidence_text('evidence_folded_harmonics') or 'None'}"
+                )
+            report.text_block("4. Folded-period study", folded_evidence, min_height=0.18)
         if result and sections["prewhitening"] and result.get("has_prewhitening"):
             report.block(
-                "Iterative prewhitening plots",
+                "Voluntary extension - iterative prewhitening",
                 0.30,
                 lambda fig, x, y, w, h: draw_prewhitening_summary_plot(fig, x, y, w, h, result),
             )
@@ -1968,14 +2187,20 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 columns=["period", "period_error", "frequency", "frequency_error", "FAP", "type"],
                 max_rows=7,
             )
-            evidence_text = (
+            prewhitening_evidence = (
                 f"Periods used: {st.session_state.get('evidence_prewhitening_periods', 'Not provided.')}\n"
                 f"{st.session_state.get('evidence_prewhitening_comments', 'No comments provided.')}"
             )
-            report.text_block("Prewhitening evidence", evidence_text, min_height=0.14)
+            report.text_block("Voluntary prewhitening evidence", prewhitening_evidence, min_height=0.14)
+        if result:
+            final_evidence = "\n".join([
+                f"Final review: {evidence_text('evidence_final_review') or 'PENDING'}",
+                f"Comparison with the bibliography: {evidence_text('evidence_final_literature_comparison') or 'PENDING'}",
+            ])
+            report.text_block("5. Final assessment", final_evidence, min_height=0.21)
         if sections["tomography"] and advanced:
             report.block(
-                "Period tomography",
+                "Voluntary extension — period tomography",
                 0.32,
                 lambda fig, x, y, w, h: draw_tomography_summary_plot(fig, x, y, w, h, advanced),
             )
@@ -1985,10 +2210,10 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 f"Window step: {st.session_state.get('evidence_tomography_window_step', advanced.get('window_step', 'Not provided'))}",
                 f"Comments: {st.session_state.get('evidence_tomography_comments', 'No comments provided.')}",
             ])
-            report.text_block("Tomography evidence", tomography_text, min_height=0.16)
+            report.text_block("Voluntary tomography evidence", tomography_text, min_height=0.16)
         if result and sections["model_lab"] and model_result:
             report.block(
-                "Model laboratory plots",
+                "Voluntary extension — one Model Laboratory model",
                 0.30,
                 lambda fig, x, y, w, h: draw_model_lab_summary_plot(fig, x, y, w, h, model_result, result),
             )
@@ -2014,7 +2239,7 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                     line_gap=0.055,
                 )
             report.text_block(
-                "Model-laboratory evidence",
+                "Single-model justification",
                 str(st.session_state.get("evidence_model_lab_comments", "No comments provided.")),
                 min_height=0.13,
             )
@@ -3741,23 +3966,58 @@ def report_controls(prefix: str, location=st) -> None:
         key=f"{prefix}_previous_report_pdf",
         help="Optional. If provided, the current report is appended as additional pages.",
     )
-    location.caption("Sections to include")
-    section_cols = location.columns(2)
-    section_cols[0].checkbox("Frequency search", value=st.session_state.get("report_include_frequency", True), key="report_include_frequency")
-    section_cols[1].checkbox("Iterative prewhitening", value=st.session_state.get("report_include_prewhitening", True), key="report_include_prewhitening")
-    section_cols = location.columns(2)
-    section_cols[0].checkbox("Period tomography", value=st.session_state.get("report_include_tomography", True), key="report_include_tomography")
-    section_cols[1].checkbox("Model laboratory", value=st.session_state.get("report_include_model_lab", True), key="report_include_model_lab")
     if not result:
         location.info("Run an analysis before generating a report.")
         return
+
+    status = student_workflow_status()
+    missing = [str(row["step"]) for row in status if not row["complete"]]
+    location.markdown("**Required student workflow**")
+    location.progress((len(status) - len(missing)) / len(status))
+    if missing:
+        location.warning("Draft report. Pending evidence: " + "; ".join(missing))
+    else:
+        location.success("All required evidence stages are complete.")
+    location.checkbox(
+        "Core workflow: light curve, bibliography, frequency analysis, folded-profile decision, and final review",
+        value=True,
+        disabled=True,
+        key="report_include_core_workflow",
+    )
+
+    optional_selections = list(st.session_state.get("evidence_optional_selections", ["None"]))
+    if "report_include_tomography" not in st.session_state:
+        st.session_state["report_include_tomography"] = "Tomography" in optional_selections
+    if "report_include_model_lab" not in st.session_state:
+        st.session_state["report_include_model_lab"] = "Model Laboratory" in optional_selections
+    if "report_include_prewhitening" not in st.session_state:
+        st.session_state["report_include_prewhitening"] = "Iterative prewhitening" in optional_selections
+    location.markdown("**Voluntary sections**")
+    location.checkbox(
+        "Iterative prewhitening (voluntary)",
+        key="report_include_prewhitening",
+        disabled=not bool(result.get("has_prewhitening")),
+        help="Include only when the student selected periods, performed the iterative subtraction, and discussed the residual spectrum.",
+    )
+    location.checkbox(
+        "Period tomography (voluntary)",
+        key="report_include_tomography",
+        disabled=st.session_state.get("app_advanced_result") is None,
+        help="Include only when the student has performed and discussed the tomography.",
+    )
+    location.checkbox(
+        "One Model Laboratory model (voluntary)",
+        key="report_include_model_lab",
+        disabled=st.session_state.get("app_model_lab_result") is None,
+        help="The report includes only the currently fitted model. The student must justify why it is applicable.",
+    )
     try:
         pdf_report = build_periodicity_pdf_report(result, metadata=current_metadata)
         pdf_download = pdf_report
-        button_label = "Generate PDF report"
+        button_label = "Download final PDF report" if not missing else "Download draft PDF report"
         if previous_report_pdf is not None:
             pdf_download = append_pdf_report(previous_report_pdf.getvalue(), pdf_report)
-            button_label = "Generate appended PDF report"
+            button_label = "Download appended final PDF report" if not missing else "Download appended draft PDF report"
         location.download_button(
             button_label,
             data=pdf_download,
@@ -3829,7 +4089,6 @@ def render_search_outputs(result: dict | None) -> None:
         dataframe_download("Download window data", pd.DataFrame({"period": result["series"]["period"], "window_power": result["series"]["window_power"]}), "sampling_window.txt", "app_download_window")
     with dl_cols[2]:
         dataframe_download("Download folded data", pd.DataFrame({"phase": result["series"]["fold_phase"], "flux": result["series"]["fold_flux"], "error": result["series"]["fold_error"]}), "folded_profile.txt", "app_download_folded")
-    render_frequency_evidence("l1", result)
 
 
 def render_file_preview(prefix: str) -> None:
@@ -3882,7 +4141,6 @@ def render_secondary_outputs(result: dict | None) -> None:
                     st.dataframe(prewhitening_summary_dataframe(result.get("prewhitening_summary", {})), use_container_width=True, hide_index=True)
             st.caption("Remaining LS peaks after prewhitening")
             st.dataframe(peaks_dataframe(result.get("residual_peaks", [])), use_container_width=True, hide_index=True)
-        render_prewhitening_evidence()
     if st.session_state.get("app_show_model") and result.get("has_prewhitening"):
         st.plotly_chart(
             prewhitening_model_plot(result, st.session_state.get("l1_show_model_errors", True)),
@@ -3895,7 +4153,6 @@ def render_secondary_outputs(result: dict | None) -> None:
         if advanced.get("message"):
             st.warning(str(advanced["message"]))
         st.plotly_chart(advanced_plot(advanced), use_container_width=True)
-        render_tomography_evidence("l1")
 
 
 def model_parameter_value(model_result: dict, name: str) -> float | None:
@@ -4292,7 +4549,6 @@ def render_model_lab_outputs(result: dict | None) -> None:
         prefix_name = "pulse"
     else:
         return
-    render_model_lab_evidence(model_result)
     phase_model_download = {
         "phase": model_result.get("model_phase", []),
         "model_flux": model_result.get("model_flux", []),
@@ -4349,11 +4605,11 @@ def render_model_lab_outputs(result: dict | None) -> None:
 def layout_one() -> None:
     prefix = "l1"
     st.title("Periodicity Workbench")
-    st.caption(f"Version {APP_VERSION}")
+    st.caption(f"Guided light-curve analysis and student evidence workflow - Version {APP_VERSION}")
     with st.sidebar:
-        with st.expander("Input", expanded=True):
+        with st.expander("Input", expanded=False):
             input_controls(prefix, st)
-        with st.expander("Frequency Search", expanded=True):
+        with st.expander("Frequency Search", expanded=False):
             search_controls(prefix, st)
             st.divider()
             st.markdown("**Uncertainties**")
@@ -4386,6 +4642,7 @@ def layout_one() -> None:
     render_search_outputs(result)
     render_secondary_outputs(result)
     render_model_lab_outputs(result)
+    render_student_workflow_notebook(result)
 
 st.sidebar.header("Analysis controls")
 
