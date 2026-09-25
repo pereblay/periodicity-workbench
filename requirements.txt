@@ -2,8 +2,9 @@ astropy
 matplotlib
 numpy
 scipy
-streamlit
-pandas
+streamlit>=1.58,<1.65
+pandas>=3.0,<3.1
+pyarrow>=24,<25
 plotly
 pypdf
 certifi

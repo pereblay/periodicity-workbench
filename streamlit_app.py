@@ -32,14 +32,14 @@ from app import BHL_DONOR_PRESETS, advanced_time_frequency_map, bhl_donor_preset
 try:
     APP_VERSION = (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip()
 except OSError:
-    APP_VERSION = "1.7.0"
+    APP_VERSION = "1.8.0"
 
 REPORT_LOGO_PATH = Path(__file__).resolve().parent / "static" / "report_logo.png"
 REPORT_LOGO_WIDTH_PX = 150
 
 
 st.set_page_config(
-    page_title="Periodicity Workbench",
+    page_title=f"Periodicity Workbench {APP_VERSION}",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -168,7 +168,7 @@ HELP_FILE = "HELP.md"
 
 
 def return_from_help_button(key: str) -> None:
-    if st.button("Back to analysis", use_container_width=True, key=key):
+    if st.button("Back to analysis", width="stretch", key=key):
         st.session_state["app_show_help"] = False
         st.rerun()
 
@@ -187,7 +187,7 @@ def render_help_document() -> None:
 
 
 def return_from_bibliography_button(key: str) -> None:
-    if st.button("Back to analysis", use_container_width=True, key=key):
+    if st.button("Back to analysis", width="stretch", key=key):
         st.session_state["app_show_bibliography"] = False
         st.rerun()
 
@@ -304,7 +304,7 @@ def render_bibliography_search(prefix: str = "l1") -> None:
             }
             for row in rows
         ])
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.dataframe(table, width="stretch", hide_index=True)
         st.markdown("**Abstract snippets**")
         for index, row in enumerate(rows[:10], start=1):
             with st.expander(f"{index}. {row['title']}", expanded=False):
@@ -504,29 +504,28 @@ def render_fits_selector(prefix: str, file_bytes: bytes, filename: str) -> None:
     error_options = ["None"] + column_names
     error_value = st.session_state.get(f"{prefix}_fits_error_col", "None")
     if error_value not in error_options:
-        error_value = "None"
+        st.session_state[f"{prefix}_fits_error_col"] = "None"
     cols[2].selectbox(
         "Error column",
         options=error_options,
-        index=error_options.index(error_value),
         disabled=not bool(st.session_state.get(f"{prefix}_use_error", True)),
         key=f"{prefix}_fits_error_col",
     )
     st.dataframe(
         pd.DataFrame(column_rows),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=180,
     )
     timing_metadata = fits_timing_metadata(file_bytes, int(selected_extension), str(st.session_state[f"{prefix}_fits_time_col"]))
     timing_rows = [
-        {"keyword": key.upper(), "value": timing_metadata.get(key)}
+        {"keyword": key.upper(), "value": str(timing_metadata.get(key))}
         for key in ["timesys", "timeref", "tassign", "timeunit", "mjdref", "mjdrefi", "mjdreff", "plephem"]
         if timing_metadata.get(key) is not None
     ]
     if timing_rows:
         with st.expander("FITS timing metadata", expanded=False):
-            st.dataframe(pd.DataFrame(timing_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(timing_rows), width="stretch", hide_index=True)
     else:
         st.warning("This FITS table does not expose standard barycentric timing keywords. Auto mode will attempt a geocentric approximation after coordinates are provided.")
 
@@ -772,7 +771,7 @@ def dataframe_download(label: str, df: pd.DataFrame, filename: str, key: str) ->
         file_name=filename,
         mime="text/plain",
         key=key,
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -958,64 +957,223 @@ def evidence_period_rows(prefix: str, key: str) -> list[dict[str, str]]:
     return rows
 
 
-def render_frequency_evidence(prefix: str, result: dict | None) -> None:
-    with st.expander("Save evidences", expanded=False):
-        st.caption("These notes are kept while the widget is closed and can be included in the PDF report.")
-        cols = st.columns(2)
-        default_period = "" if not result or result.get("primary_period") is None else f"{float(result['primary_period']):.8g}"
-        if f"evidence_frequency_period" not in st.session_state and default_period:
-            st.session_state["evidence_frequency_period"] = default_period
-        cols[0].text_input("Period", key="evidence_frequency_period")
-        cols[1].text_input("Error", key="evidence_frequency_error")
-        count = int(st.session_state.get("evidence_frequency_extra_count", 0))
-        for index in range(count):
-            extra_cols = st.columns(2)
-            extra_cols[0].text_input(f"Extra period {index + 1}", key=f"evidence_frequency_extra_period_{index}")
-            extra_cols[1].text_input(f"Extra error {index + 1}", key=f"evidence_frequency_extra_error_{index}")
-        if st.button("Add extra period", key="evidence_frequency_add_period"):
-            st.session_state["evidence_frequency_extra_count"] = count + 1
-            st.rerun()
-        st.text_area(
-            "Comments on period(s) found and comparison to literature:",
-            key="evidence_frequency_comments",
-            height=130,
+PERIODICITY_DECISIONS = [
+    "Not assessed yet",
+    "A reliable periodicity can be determined",
+    "No reliable periodicity can be determined",
+    "The result is inconclusive",
+]
+
+VOLUNTARY_OPTIONS = [
+    "None",
+    "Iterative prewhitening",
+    "Tomography",
+    "Model Laboratory",
+]
+
+
+def evidence_text(key: str, fallback_key: str | None = None) -> str:
+    value = str(st.session_state.get(key, "") or "").strip()
+    if not value and fallback_key:
+        value = str(st.session_state.get(fallback_key, "") or "").strip()
+    return value
+
+
+def student_workflow_status() -> list[dict[str, object]]:
+    decision = str(st.session_state.get("evidence_periodicity_decision", PERIODICITY_DECISIONS[0]))
+    periodic = decision == PERIODICITY_DECISIONS[1]
+    frequency_complete = (
+        decision != PERIODICITY_DECISIONS[0]
+        and bool(evidence_text("evidence_frequency_reason", "evidence_frequency_comments"))
+        and bool(evidence_text("evidence_frequency_harmonics"))
+    )
+    if periodic:
+        frequency_complete = frequency_complete and bool(
+            evidence_text("evidence_frequency_selected") or evidence_text("evidence_frequency_period")
         )
-
-
-def render_prewhitening_evidence() -> None:
-    with st.expander("Save evidences", expanded=False):
-        chain = st.session_state.get("app_prewhitening_periods", [])
-        if "evidence_prewhitening_periods" not in st.session_state and chain:
-            st.session_state["evidence_prewhitening_periods"] = ", ".join(f"{float(period):.8g}" for period in chain)
-        st.text_area("Periods used:", key="evidence_prewhitening_periods", height=90)
-        st.text_area(
-            "Comments on used periods and comparison to literature:",
-            key="evidence_prewhitening_comments",
-            height=130,
+    folded_complete = decision in PERIODICITY_DECISIONS[2:]
+    folded_detail = (
+        "Not required after a justified non-periodic or inconclusive result"
+        if folded_complete
+        else "Complete the periodicity decision before assessing this stage"
+    )
+    if periodic:
+        folded_complete = bool(evidence_text("evidence_folded_comments")) and bool(
+            evidence_text("evidence_folded_harmonics")
         )
+        folded_detail = "Comment on the folded profile and its possible harmonics"
+    rows = [
+        {
+            "step": "1. Light-curve inspection",
+            "complete": bool(evidence_text("evidence_lightcurve_appearance")),
+            "detail": "Describe the appearance, coverage, gaps, scatter, trends, and outliers",
+        },
+        {
+            "step": "2. Bibliographic review",
+            "complete": bool(evidence_text("evidence_bibliography_reviews")),
+            "detail": "Record relevant references and concise reviews",
+        },
+        {
+            "step": "3. Frequency analysis",
+            "complete": frequency_complete,
+            "detail": "Decide whether periodicity is measurable; justify the selected frequency and harmonics",
+        },
+        {"step": "4. Folded profile", "complete": folded_complete, "detail": folded_detail},
+        {
+            "step": "5. Final assessment",
+            "complete": bool(evidence_text("evidence_final_review"))
+            and bool(evidence_text("evidence_final_literature_comparison")),
+            "detail": "Summarize the work and compare the conclusion with the literature",
+        },
+    ]
+    return rows
 
 
-def render_tomography_evidence(prefix: str) -> None:
-    with st.expander("Save evidences", expanded=False):
-        cols = st.columns(2)
-        if "evidence_tomography_window_width" not in st.session_state:
-            st.session_state["evidence_tomography_window_width"] = str(st.session_state.get(f"{prefix}_advanced_width", ""))
-        if "evidence_tomography_window_step" not in st.session_state:
-            st.session_state["evidence_tomography_window_step"] = str(st.session_state.get(f"{prefix}_advanced_step", ""))
-        cols[0].text_input("Window width", key="evidence_tomography_window_width")
-        cols[1].text_input("Window step", key="evidence_tomography_window_step")
-        st.text_area("Comments on tomography results:", key="evidence_tomography_comments", height=130)
+def normalize_voluntary_selections() -> None:
+    selected = list(st.session_state.get("evidence_optional_selections", ["None"]))
+    previous = set(st.session_state.get("_evidence_optional_previous", ["None"]))
+    if not selected:
+        selected = ["None"]
+    elif "None" in selected and len(selected) > 1:
+        selected = ["None"] if "None" not in previous else [item for item in selected if item != "None"]
+    st.session_state["evidence_optional_selections"] = selected
+    st.session_state["_evidence_optional_previous"] = list(selected)
+    st.session_state["report_include_prewhitening"] = "Iterative prewhitening" in selected
+    st.session_state["report_include_tomography"] = "Tomography" in selected
+    st.session_state["report_include_model_lab"] = "Model Laboratory" in selected
 
 
-def render_model_lab_evidence(model_result: dict | None) -> None:
-    with st.expander("Save evidences", expanded=False):
-        family = str((model_result or {}).get("family", "selected model")).replace("_", " ")
-        st.caption(f"Evidence for: {family}")
+def render_student_workflow_notebook(result: dict | None) -> None:
+    if not result:
+        return
+    if "evidence_frequency_period" not in st.session_state and result.get("primary_period") is not None:
+        st.session_state["evidence_frequency_period"] = f"{float(result['primary_period']):.8g}"
+    if "evidence_frequency_selected" not in st.session_state and result.get("primary_period"):
+        st.session_state["evidence_frequency_selected"] = f"{1.0 / float(result['primary_period']):.8g}"
+    chain = st.session_state.get("app_prewhitening_periods", [])
+    if "evidence_prewhitening_periods" not in st.session_state and chain:
+        st.session_state["evidence_prewhitening_periods"] = ", ".join(f"{float(period):.8g}" for period in chain)
+    if "evidence_tomography_window_width" not in st.session_state:
+        st.session_state["evidence_tomography_window_width"] = str(st.session_state.get("l1_advanced_width", ""))
+    if "evidence_tomography_window_step" not in st.session_state:
+        st.session_state["evidence_tomography_window_step"] = str(st.session_state.get("l1_advanced_step", ""))
+    if "evidence_optional_selections" not in st.session_state:
+        legacy_choice = str(st.session_state.get("evidence_optional_choice", "None"))
+        migrated = []
+        if "Tomography" in legacy_choice:
+            migrated.append("Tomography")
+        if "model" in legacy_choice.lower():
+            migrated.append("Model Laboratory")
+        st.session_state["evidence_optional_selections"] = migrated or ["None"]
+        st.session_state["_evidence_optional_previous"] = list(st.session_state["evidence_optional_selections"])
+
+    st.divider()
+    st.subheader("Student workflow and evidence notebook")
+    st.caption(
+        "Complete the five required stages in order. Notes persist while the app remains open "
+        "and are incorporated into the generated PDF."
+    )
+    status = student_workflow_status()
+    completed = sum(bool(row["complete"]) for row in status)
+    st.progress(completed / len(status), text=f"Required workflow: {completed}/{len(status)} stages complete")
+    st.dataframe(
+        pd.DataFrame(
+            [{"Status": "Complete" if row["complete"] else "Pending", "Stage": row["step"], "Evidence required": row["detail"]} for row in status]
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+    with st.expander("1. Upload and inspect the light curve — required", expanded=not status[0]["complete"]):
         st.text_area(
-            "Comments and comparison to literature:",
-            key="evidence_model_lab_comments",
-            height=150,
+            "Comment on the appearance of the light curve",
+            key="evidence_lightcurve_appearance",
+            height=140,
+            placeholder="Coverage, gaps, variability, scatter, trends, outliers, instrumental features...",
         )
+    with st.expander("2. Bibliographic search — required", expanded=not status[1]["complete"]):
+        st.caption("Use the Bibliographic Search button in the Input panel, then record the useful references here.")
+        st.text_area(
+            "Relevant references and short reviews",
+            key="evidence_bibliography_reviews",
+            height=170,
+            placeholder="Citation or URL — relevant published period/result — why it matters for this analysis",
+        )
+    with st.expander("3. Frequency analysis and periodicity decision — required", expanded=not status[2]["complete"]):
+        st.selectbox("Conclusion about periodicity", PERIODICITY_DECISIONS, key="evidence_periodicity_decision")
+        units = result.get("frequency_unit", "1/d")
+        period_unit = result.get("period_unit", "d")
+        cols = st.columns(3)
+        cols[0].text_input(f"Selected frequency ({units})", key="evidence_frequency_selected")
+        cols[1].text_input(f"Equivalent period ({period_unit})", key="evidence_frequency_period")
+        cols[2].text_input(f"Period uncertainty ({period_unit})", key="evidence_frequency_error")
+        st.text_area(
+            "Justification for the decision and selected frequency",
+            key="evidence_frequency_reason",
+            height=135,
+            placeholder="Significance, sampling window, aliases, signal-to-noise, baseline, peak width...",
+        )
+        st.text_area(
+            "Analysis of possible harmonics",
+            key="evidence_frequency_harmonics",
+            height=120,
+            placeholder="Which peaks are compatible with f, 2f, 3f or subharmonics? Could the apparent period be P/2?",
+        )
+    decision = str(st.session_state.get("evidence_periodicity_decision", PERIODICITY_DECISIONS[0]))
+    periodic = decision == PERIODICITY_DECISIONS[1]
+    folded_title = "4. Folded-period study — required when periodicity is reliable"
+    with st.expander(folded_title, expanded=periodic and not status[3]["complete"]):
+        if decision == PERIODICITY_DECISIONS[0]:
+            st.warning("This stage remains pending until the periodicity conclusion is completed.")
+        elif not periodic:
+            st.info("This stage is not required for the current non-periodic or inconclusive conclusion. You may still add exploratory notes.")
+        st.text_area("Interpretation of the folded profile", key="evidence_folded_comments", height=135)
+        st.text_area(
+            "Harmonics and ambiguities in the folded profile",
+            key="evidence_folded_harmonics",
+            height=120,
+            placeholder="Shape, coherence, maxima/minima, two-cycle symmetry, P versus 2P ambiguity...",
+        )
+    with st.expander("5. Final assessment and literature comparison — required", expanded=not status[4]["complete"]):
+        st.text_area("Final review of the work", key="evidence_final_review", height=140)
+        st.text_area(
+            "Comparison with the bibliography",
+            key="evidence_final_literature_comparison",
+            height=140,
+            placeholder="Agreement, disagreement, limitations, and what would be needed to resolve ambiguities",
+        )
+    with st.expander("Voluntary extension — additional analyses", expanded=False):
+        st.caption(
+            "Select one or several analyses. ‘None’ is exclusive. "
+            "In Model Laboratory, report only one model and justify why it is applicable."
+        )
+        optional_selections = st.multiselect(
+            "Voluntary work included",
+            VOLUNTARY_OPTIONS,
+            key="evidence_optional_selections",
+            on_change=normalize_voluntary_selections,
+        )
+        if "Iterative prewhitening" in optional_selections:
+            st.text_area("Periods used in iterative prewhitening", key="evidence_prewhitening_periods", height=90)
+            st.text_area(
+                "Why prewhitening was used and what remains after each subtraction",
+                key="evidence_prewhitening_comments",
+                height=130,
+            )
+        if "Tomography" in optional_selections:
+            cols = st.columns(2)
+            cols[0].text_input("Tomography window width", key="evidence_tomography_window_width")
+            cols[1].text_input("Tomography window step", key="evidence_tomography_window_step")
+            st.text_area("Observed time variations and interpretation", key="evidence_tomography_comments", height=125)
+        if "Model Laboratory" in optional_selections:
+            model_result = st.session_state.get("app_model_lab_result")
+            family = str((model_result or {}).get("family", "No fitted model yet")).replace("_", " ")
+            st.text_input("Single model reported", value=family, disabled=True)
+            st.text_area(
+                "Why this model is applicable and what its result means",
+                key="evidence_model_lab_comments",
+                height=140,
+            )
 
 
 def dataframe_to_lines(df: pd.DataFrame, max_rows: int = 12) -> list[str]:
@@ -1038,11 +1196,19 @@ def report_metadata() -> dict[str, str]:
 
 def report_selected_sections() -> dict[str, bool]:
     return {
-        "frequency": bool(st.session_state.get("report_include_frequency", True)),
+        "frequency": True,
         "prewhitening": bool(st.session_state.get("report_include_prewhitening", True)),
-        "tomography": bool(st.session_state.get("report_include_tomography", True)),
-        "model_lab": bool(st.session_state.get("report_include_model_lab", True)),
+        "tomography": bool(st.session_state.get("report_include_tomography", False)),
+        "model_lab": bool(st.session_state.get("report_include_model_lab", False)),
     }
+
+
+def workflow_report_lines() -> list[str]:
+    lines = []
+    for row in student_workflow_status():
+        marker = "COMPLETE" if row["complete"] else "PENDING"
+        lines.append(f"[{marker}] {row['step']}: {row['detail']}")
+    return lines
 
 
 def add_wrapped_text(ax, lines: list[str] | str, y_start: float = 0.94, size: int = 10, width: int = 95) -> None:
@@ -1293,12 +1459,15 @@ class CompactPdfReport:
                 resized = source.resize((REPORT_LOGO_WIDTH_PX, logo_height), Image.Resampling.LANCZOS)
                 self.logo = np.asarray(resized)
         self.fig: Figure | None = None
+        self.page_decorated = False
         self.y = 0.90
         self.page_has_content = False
         self.new_page()
 
     def decorate_page(self) -> None:
         assert self.fig is not None
+        if self.page_decorated:
+            return
         if self.logo is not None:
             page_width_px = int(round(self.fig.get_figwidth() * self.fig.dpi))
             page_height_px = int(round(self.fig.get_figheight() * self.fig.dpi))
@@ -1325,6 +1494,7 @@ class CompactPdfReport:
             ha="right",
             va="center",
         )
+        self.page_decorated = True
 
     def save_page(self) -> None:
         if self.fig is not None and self.page_has_content:
@@ -1334,8 +1504,10 @@ class CompactPdfReport:
     def new_page(self) -> None:
         self.save_page()
         self.fig = Figure(figsize=(8.27, 11.69), dpi=100)
+        self.page_decorated = False
         self.y = 0.90
         self.page_has_content = False
+        self.decorate_page()
 
     def finish(self) -> None:
         self.save_page()
@@ -1891,9 +2063,24 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 0.31,
                 lambda fig, x, y, w, h: draw_input_overview(fig, x, y, w, h, result),
             )
+            report.text_block(
+                "Student workflow completion",
+                "\n".join(workflow_report_lines()),
+                min_height=0.20,
+            )
+            report.text_block(
+                "1. Initial light-curve inspection",
+                evidence_text("evidence_lightcurve_appearance") or "PENDING — no student commentary was provided.",
+                min_height=0.16,
+            )
+            report.text_block(
+                "2. Bibliographic search and relevant reviews",
+                evidence_text("evidence_bibliography_reviews") or "PENDING — no bibliography review was provided.",
+                min_height=0.18,
+            )
         if result and sections["frequency"]:
             report.block(
-                "Frequency search plots",
+                "3. Frequency search plots",
                 0.31,
                 lambda fig, x, y, w, h: draw_frequency_summary_plot(fig, x, y, w, h, result),
             )
@@ -1936,14 +2123,45 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 max_rows=8,
             )
             period_lines = evidence_period_rows("l1", "frequency")
-            evidence_text = (
-                f"Periods reported by the student: {period_lines or 'Not provided.'}\n"
-                f"{st.session_state.get('evidence_frequency_comments', 'No comments provided.')}"
-            )
-            report.text_block("Frequency-search evidence", evidence_text, min_height=0.14)
+            period_summary = "; ".join(
+                f"{row['period']}" + (f" +/- {row['error']}" if row.get("error") else "")
+                for row in period_lines
+            ) or "Not provided"
+            decision = str(st.session_state.get("evidence_periodicity_decision", PERIODICITY_DECISIONS[0]))
+            selected_frequency = evidence_text("evidence_frequency_selected") or "Not provided"
+            frequency_reason = evidence_text("evidence_frequency_reason", "evidence_frequency_comments") or "PENDING"
+            harmonic_analysis = evidence_text("evidence_frequency_harmonics") or "PENDING"
+            frequency_evidence = "\n".join([
+                f"Periodicity conclusion: {decision}",
+                f"Selected frequency: {selected_frequency}",
+                f"Adopted period(s): {period_summary}",
+                f"Decision and selection rationale: {frequency_reason}",
+                f"Possible harmonics: {harmonic_analysis}",
+            ])
+            report.text_block("3. Frequency-analysis evidence", frequency_evidence, min_height=0.24)
+            periodic = decision == PERIODICITY_DECISIONS[1]
+            if periodic:
+                folded_evidence = "\n".join([
+                    f"Folded-profile interpretation: {evidence_text('evidence_folded_comments') or 'PENDING'}",
+                    f"Harmonics and ambiguities: {evidence_text('evidence_folded_harmonics') or 'PENDING'}",
+                ])
+            elif decision in PERIODICITY_DECISIONS[2:]:
+                folded_evidence = (
+                    f"Not required for the current conclusion: {decision}. "
+                    "Any exploratory notes entered by the student follow.\n"
+                    f"Profile: {evidence_text('evidence_folded_comments') or 'None'}\n"
+                    f"Harmonics: {evidence_text('evidence_folded_harmonics') or 'None'}"
+                )
+            else:
+                folded_evidence = (
+                    "PENDING - the student must first decide whether a reliable periodicity can be determined.\n"
+                    f"Exploratory profile notes: {evidence_text('evidence_folded_comments') or 'None'}\n"
+                    f"Exploratory harmonic notes: {evidence_text('evidence_folded_harmonics') or 'None'}"
+                )
+            report.text_block("4. Folded-period study", folded_evidence, min_height=0.18)
         if result and sections["prewhitening"] and result.get("has_prewhitening"):
             report.block(
-                "Iterative prewhitening plots",
+                "Voluntary extension - iterative prewhitening",
                 0.30,
                 lambda fig, x, y, w, h: draw_prewhitening_summary_plot(fig, x, y, w, h, result),
             )
@@ -1968,14 +2186,20 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 columns=["period", "period_error", "frequency", "frequency_error", "FAP", "type"],
                 max_rows=7,
             )
-            evidence_text = (
+            prewhitening_evidence = (
                 f"Periods used: {st.session_state.get('evidence_prewhitening_periods', 'Not provided.')}\n"
                 f"{st.session_state.get('evidence_prewhitening_comments', 'No comments provided.')}"
             )
-            report.text_block("Prewhitening evidence", evidence_text, min_height=0.14)
+            report.text_block("Voluntary prewhitening evidence", prewhitening_evidence, min_height=0.14)
+        if result:
+            final_evidence = "\n".join([
+                f"Final review: {evidence_text('evidence_final_review') or 'PENDING'}",
+                f"Comparison with the bibliography: {evidence_text('evidence_final_literature_comparison') or 'PENDING'}",
+            ])
+            report.text_block("5. Final assessment", final_evidence, min_height=0.21)
         if sections["tomography"] and advanced:
             report.block(
-                "Period tomography",
+                "Voluntary extension — period tomography",
                 0.32,
                 lambda fig, x, y, w, h: draw_tomography_summary_plot(fig, x, y, w, h, advanced),
             )
@@ -1985,10 +2209,10 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                 f"Window step: {st.session_state.get('evidence_tomography_window_step', advanced.get('window_step', 'Not provided'))}",
                 f"Comments: {st.session_state.get('evidence_tomography_comments', 'No comments provided.')}",
             ])
-            report.text_block("Tomography evidence", tomography_text, min_height=0.16)
+            report.text_block("Voluntary tomography evidence", tomography_text, min_height=0.16)
         if result and sections["model_lab"] and model_result:
             report.block(
-                "Model laboratory plots",
+                "Voluntary extension — one Model Laboratory model",
                 0.30,
                 lambda fig, x, y, w, h: draw_model_lab_summary_plot(fig, x, y, w, h, model_result, result),
             )
@@ -2014,7 +2238,7 @@ def build_periodicity_pdf_report(result: dict | None, metadata: dict[str, str] |
                     line_gap=0.055,
                 )
             report.text_block(
-                "Model-laboratory evidence",
+                "Single-model justification",
                 str(st.session_state.get("evidence_model_lab_comments", "No comments provided.")),
                 min_height=0.13,
             )
@@ -2787,7 +3011,7 @@ def input_controls(prefix: str, location=st) -> None:
     target_cols = location.columns([0.62, 0.38])
     target_name = target_cols[0].text_input("Object name", key=f"{prefix}_target_name", placeholder="e.g. 4U 2206+54")
     target_cols[1].markdown("<div style='height: 1.78rem'></div>", unsafe_allow_html=True)
-    if target_cols[1].button("SIMBAD search", use_container_width=True, key=f"{prefix}_resolve_target"):
+    if target_cols[1].button("SIMBAD search", width="stretch", key=f"{prefix}_resolve_target"):
         try:
             ra_deg, dec_deg, resolved = resolve_target_name(str(st.session_state.get(f"{prefix}_target_name", "")))
         except Exception as exc:
@@ -2815,7 +3039,7 @@ def input_controls(prefix: str, location=st) -> None:
     )
     if location.button(
         "Bibliographic Search",
-        use_container_width=True,
+        width="stretch",
         key=f"{prefix}_show_bibliography_input",
         disabled=not target_ready,
         help="Resolve the object with SIMBAD before searching bibliography." if not target_ready else "Search literature mentioning time series, periods, periodicity, timing, or variability.",
@@ -2829,13 +3053,13 @@ def input_controls(prefix: str, location=st) -> None:
     limit_cols[1].text_input("xmax", value=st.session_state.get(f"{prefix}_xmax", ""), key=f"{prefix}_xmax", placeholder="auto")
     limit_cols[2].text_input("ymin", value=st.session_state.get(f"{prefix}_ymin", ""), key=f"{prefix}_ymin", placeholder="auto")
     limit_cols[3].text_input("ymax", value=st.session_state.get(f"{prefix}_ymax", ""), key=f"{prefix}_ymax", placeholder="auto")
-    if location.button("Clear workspace", use_container_width=True, key=f"{prefix}_clear"):
+    if location.button("Clear workspace", width="stretch", key=f"{prefix}_clear"):
         clear_state(reset_file=True)
         st.rerun()
 
 
 def search_controls(prefix: str, location=st) -> None:
-    if location.button("Run analysis", type="primary", use_container_width=True, key=f"{prefix}_run"):
+    if location.button("Run analysis", type="primary", width="stretch", key=f"{prefix}_run"):
         run_analysis_action(prefix, location)
     time_unit = st.session_state.get(f"{prefix}_time_unit", "days")
     suggestion = None
@@ -2863,7 +3087,7 @@ def search_controls(prefix: str, location=st) -> None:
         labels = axis_labels(time_unit)
         frequency_unit = "Hz" if labels["baseline"] == "s" else "cycles/day"
         location.info(f"{suggestion[2]}\n\nSuggested range: {suggestion[0]:.6g} - {suggestion[1]:.6g} {frequency_unit}.")
-        if location.button("Use suggested frequency range", use_container_width=True, key=f"{prefix}_use_suggested_frequency"):
+        if location.button("Use suggested frequency range", width="stretch", key=f"{prefix}_use_suggested_frequency"):
             st.session_state[f"{prefix}_fmin"] = float(suggestion[0])
             st.session_state[f"{prefix}_fmax"] = float(suggestion[1])
             st.rerun()
@@ -2884,7 +3108,7 @@ def uncertainty_controls(prefix: str, location=st) -> None:
     cols = location.columns(2)
     cols[0].number_input("Bootstrap iterations", min_value=0, value=st.session_state.get(f"{prefix}_bootstrap", 1000), step=50, key=f"{prefix}_bootstrap")
     cols[1].number_input("Bootstrap local width", min_value=0.001, value=st.session_state.get(f"{prefix}_bootstrap_width", 0.03), step=0.001, format="%.3f", key=f"{prefix}_bootstrap_width")
-    if location.button("Update uncertainties", use_container_width=True, key=f"{prefix}_update_uncertainties"):
+    if location.button("Update uncertainties", width="stretch", key=f"{prefix}_update_uncertainties"):
         if "app_file_bytes" not in st.session_state:
             location.error("Upload a file and run the analysis first.")
         else:
@@ -2917,7 +3141,7 @@ def manual_exclusion_controls(prefix: str, location=st) -> None:
     location.number_input("Manual exclusion tolerance", min_value=0.001, value=st.session_state.get(f"{prefix}_exclusion_tolerance", 0.015), step=0.001, format="%.3f", key=f"{prefix}_exclusion_tolerance")
     if excluded:
         location.caption("Excluded: " + ", ".join(f"{period:.4g} {period_unit}" for period in st.session_state[f"{prefix}_excluded_periods"]))
-    if location.button("Apply exclusions", use_container_width=True, key=f"{prefix}_apply_exclusions"):
+    if location.button("Apply exclusions", width="stretch", key=f"{prefix}_apply_exclusions"):
         if "app_file_bytes" not in st.session_state:
             location.error("Upload a file and run the analysis first.")
         else:
@@ -2978,7 +3202,7 @@ def folded_controls(prefix: str, location=st) -> None:
         "display-optimized": "Folded-display fit with amplitude and offset matched to an adaptive outer data range; prewhitening subtraction remains standard.",
     }
     location.caption(fit_help[fit_method])
-    if location.button("Update folded profile", use_container_width=True, key=f"{prefix}_update_fold"):
+    if location.button("Update folded profile", width="stretch", key=f"{prefix}_update_fold"):
         current_result = st.session_state.get("app_result")
         if not current_result:
             location.error("Run an analysis first.")
@@ -3026,7 +3250,7 @@ def prewhitening_controls(prefix: str, location=st) -> None:
     if st.session_state.get("app_prewhitening_periods"):
         location.caption("Chain: " + ", ".join(f"{p:.4g} {period_unit}" for p in st.session_state["app_prewhitening_periods"]))
     cols = location.columns(3)
-    if cols[0].button("Next step", use_container_width=True, key=f"{prefix}_next_step"):
+    if cols[0].button("Next step", width="stretch", key=f"{prefix}_next_step"):
         period_to_add = selected_period
         if manual_period_text.strip():
             try:
@@ -3060,11 +3284,11 @@ def prewhitening_controls(prefix: str, location=st) -> None:
                 st.session_state.get(f"{prefix}_next_prewhitening_select_version", 0) + 1
             )
             st.rerun()
-    if cols[1].button("Show model", use_container_width=True, key=f"{prefix}_show_model"):
+    if cols[1].button("Show model", width="stretch", key=f"{prefix}_show_model"):
         st.session_state["app_show_model"] = True
         st.rerun()
     location.checkbox("Show errors", value=True, key=f"{prefix}_show_model_errors")
-    if cols[2].button("Clear chain", use_container_width=True, key=f"{prefix}_clear_chain"):
+    if cols[2].button("Clear chain", width="stretch", key=f"{prefix}_clear_chain"):
         st.session_state["app_prewhitening_periods"] = []
         st.session_state["app_show_model"] = False
         st.session_state[f"{prefix}_next_prewhitening_select_version"] = (
@@ -3151,7 +3375,7 @@ def advanced_controls(prefix: str, location=st) -> None:
         st.session_state[f"{prefix}_advanced_metric"] = "WWZ"
         location.number_input("WWZ decay", min_value=0.0001, value=st.session_state.get(f"{prefix}_advanced_wwz_decay", 0.0125), step=0.0025, format="%.5f", key=f"{prefix}_advanced_wwz_decay")
     show_track = location.checkbox("Show best period track", value=True, key=f"{prefix}_advanced_track")
-    if location.button("Build tomogram", use_container_width=True, key=f"{prefix}_run_advanced"):
+    if location.button("Build tomogram", width="stretch", key=f"{prefix}_run_advanced"):
         if not result:
             location.error("Run an analysis first.")
         else:
@@ -3193,7 +3417,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
     default_period = result.get("folded_period") or result.get("primary_period") or ""
     if family == "Binary interpretation assistant":
         location.caption("Compact folded-profile diagnostics for eclipsing-binary morphology, half-period ambiguity, and minimum spacing.")
-        if location.button("Run binary assistant", use_container_width=True, key=f"{prefix}_run_binary_assistant"):
+        if location.button("Run binary assistant", width="stretch", key=f"{prefix}_run_binary_assistant"):
             try:
                 st.session_state["app_model_lab_result"] = binary_interpretation_assistant(result)
             except ValueError as exc:
@@ -3282,7 +3506,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
             value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
             key=f"{prefix}_model_lab_show_time_model",
         )
-        if location.button("Run pulse analysis", use_container_width=True, key=f"{prefix}_fit_pulse_model"):
+        if location.button("Run pulse analysis", width="stretch", key=f"{prefix}_fit_pulse_model"):
             fields = fields_from_state(prefix, bootstrap_override=0)
             fields.update({
                 "model_lab_pulse_period": str(st.session_state.get(f"{prefix}_model_lab_pulse_period", "")).strip(),
@@ -3353,7 +3577,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
             value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
             key=f"{prefix}_model_lab_show_time_model",
         )
-        if location.button("Fit Fourier model", use_container_width=True, key=f"{prefix}_fit_fourier_model"):
+        if location.button("Fit Fourier model", width="stretch", key=f"{prefix}_fit_fourier_model"):
             fields = fields_from_state(prefix, bootstrap_override=0)
             fields.update({
                 "model_lab_period": str(st.session_state.get(f"{prefix}_model_lab_period", "")).strip(),
@@ -3489,7 +3713,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
             value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
             key=f"{prefix}_model_lab_show_time_model",
         )
-        if location.button("Fit Bondi-Hoyle model", use_container_width=True, key=f"{prefix}_fit_bh_model"):
+        if location.button("Fit Bondi-Hoyle model", width="stretch", key=f"{prefix}_fit_bh_model"):
             fields = fields_from_state(prefix, bootstrap_override=0)
             fields.update({
                 "model_lab_bh_period": str(st.session_state.get(f"{prefix}_model_lab_bh_period", "")).strip(),
@@ -3672,7 +3896,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
         value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
         key=f"{prefix}_model_lab_show_time_model",
     )
-    if location.button("Fit binary model", use_container_width=True, key=f"{prefix}_fit_binary_model"):
+    if location.button("Fit binary model", width="stretch", key=f"{prefix}_fit_binary_model"):
         fields = fields_from_state(prefix, bootstrap_override=0)
         fields.update({
             "model_lab_binary_period": str(st.session_state.get(f"{prefix}_model_lab_binary_period", "")).strip(),
@@ -3741,30 +3965,65 @@ def report_controls(prefix: str, location=st) -> None:
         key=f"{prefix}_previous_report_pdf",
         help="Optional. If provided, the current report is appended as additional pages.",
     )
-    location.caption("Sections to include")
-    section_cols = location.columns(2)
-    section_cols[0].checkbox("Frequency search", value=st.session_state.get("report_include_frequency", True), key="report_include_frequency")
-    section_cols[1].checkbox("Iterative prewhitening", value=st.session_state.get("report_include_prewhitening", True), key="report_include_prewhitening")
-    section_cols = location.columns(2)
-    section_cols[0].checkbox("Period tomography", value=st.session_state.get("report_include_tomography", True), key="report_include_tomography")
-    section_cols[1].checkbox("Model laboratory", value=st.session_state.get("report_include_model_lab", True), key="report_include_model_lab")
     if not result:
         location.info("Run an analysis before generating a report.")
         return
+
+    status = student_workflow_status()
+    missing = [str(row["step"]) for row in status if not row["complete"]]
+    location.markdown("**Required student workflow**")
+    location.progress((len(status) - len(missing)) / len(status))
+    if missing:
+        location.warning("Draft report. Pending evidence: " + "; ".join(missing))
+    else:
+        location.success("All required evidence stages are complete.")
+    location.checkbox(
+        "Core workflow: light curve, bibliography, frequency analysis, folded-profile decision, and final review",
+        value=True,
+        disabled=True,
+        key="report_include_core_workflow",
+    )
+
+    optional_selections = list(st.session_state.get("evidence_optional_selections", ["None"]))
+    if "report_include_tomography" not in st.session_state:
+        st.session_state["report_include_tomography"] = "Tomography" in optional_selections
+    if "report_include_model_lab" not in st.session_state:
+        st.session_state["report_include_model_lab"] = "Model Laboratory" in optional_selections
+    if "report_include_prewhitening" not in st.session_state:
+        st.session_state["report_include_prewhitening"] = "Iterative prewhitening" in optional_selections
+    location.markdown("**Voluntary sections**")
+    location.checkbox(
+        "Iterative prewhitening (voluntary)",
+        key="report_include_prewhitening",
+        disabled=not bool(result.get("has_prewhitening")),
+        help="Include only when the student selected periods, performed the iterative subtraction, and discussed the residual spectrum.",
+    )
+    location.checkbox(
+        "Period tomography (voluntary)",
+        key="report_include_tomography",
+        disabled=st.session_state.get("app_advanced_result") is None,
+        help="Include only when the student has performed and discussed the tomography.",
+    )
+    location.checkbox(
+        "One Model Laboratory model (voluntary)",
+        key="report_include_model_lab",
+        disabled=st.session_state.get("app_model_lab_result") is None,
+        help="The report includes only the currently fitted model. The student must justify why it is applicable.",
+    )
     try:
         pdf_report = build_periodicity_pdf_report(result, metadata=current_metadata)
         pdf_download = pdf_report
-        button_label = "Generate PDF report"
+        button_label = "Download final PDF report" if not missing else "Download draft PDF report"
         if previous_report_pdf is not None:
             pdf_download = append_pdf_report(previous_report_pdf.getvalue(), pdf_report)
-            button_label = "Generate appended PDF report"
+            button_label = "Download appended final PDF report" if not missing else "Download appended draft PDF report"
         location.download_button(
             button_label,
             data=pdf_download,
             file_name=current_metadata["filename"],
             mime="application/pdf",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key=f"{prefix}_download_pdf_report",
         )
     except Exception as exc:
@@ -3800,10 +4059,10 @@ def render_search_outputs(result: dict | None) -> None:
     metric_cols[3].metric("T0", f"{float(result.get('t0', 0.0)):.4f}")
     render_barycentric_status(result)
     cols = st.columns(3)
-    cols[0].plotly_chart(periodogram(result, "power", "peaks", "Lomb-Scargle periodogram"), use_container_width=True)
-    cols[1].plotly_chart(window_plot(result), use_container_width=True)
+    cols[0].plotly_chart(periodogram(result, "power", "peaks", "Lomb-Scargle periodogram"), width="stretch")
+    cols[1].plotly_chart(window_plot(result), width="stretch")
     with cols[2]:
-        st.plotly_chart(folded_plot(result), use_container_width=True)
+        st.plotly_chart(folded_plot(result), width="stretch")
     folded_terms = result.get("fold_fit_terms", [])
     if folded_terms:
         st.caption("Folded fit equation")
@@ -3811,17 +4070,17 @@ def render_search_outputs(result: dict | None) -> None:
         fit_cols = st.columns([0.8, 1.2])
         with fit_cols[0]:
             st.caption("Global fit summary")
-            st.dataframe(global_fit_summary(folded_terms), use_container_width=True, hide_index=True)
+            st.dataframe(global_fit_summary(folded_terms), width="stretch", hide_index=True)
         with fit_cols[1]:
             st.caption("Folded periods and fit parameters")
-            st.dataframe(folded_periods_and_parameters(result), use_container_width=True, hide_index=True)
+            st.dataframe(folded_periods_and_parameters(result), width="stretch", hide_index=True)
     st.subheader("Detected peaks")
-    st.dataframe(peaks_dataframe(result.get("peaks", [])), use_container_width=True, hide_index=True)
+    st.dataframe(peaks_dataframe(result.get("peaks", [])), width="stretch", hide_index=True)
     harmonic_rows = result.get("harmonic_diagnostics", [])
     if harmonic_rows:
         with st.expander("Harmonic diagnostics", expanded=False):
             st.caption("Checks the fundamental, harmonics, and longer multiples of the selected primary period. The 2P row is useful for eclipsing-binary half-period ambiguity.")
-            st.dataframe(harmonic_diagnostics_dataframe(harmonic_rows), use_container_width=True, hide_index=True)
+            st.dataframe(harmonic_diagnostics_dataframe(harmonic_rows), width="stretch", hide_index=True)
     dl_cols = st.columns(3)
     with dl_cols[0]:
         dataframe_download("Download LS data", pd.DataFrame({"period": result["series"]["period"], "frequency": result["series"]["frequency"], "power": result["series"]["power"]}), "lomb_scargle_periodogram.txt", "app_download_ls")
@@ -3829,7 +4088,6 @@ def render_search_outputs(result: dict | None) -> None:
         dataframe_download("Download window data", pd.DataFrame({"period": result["series"]["period"], "window_power": result["series"]["window_power"]}), "sampling_window.txt", "app_download_window")
     with dl_cols[2]:
         dataframe_download("Download folded data", pd.DataFrame({"phase": result["series"]["fold_phase"], "flux": result["series"]["fold_flux"], "error": result["series"]["fold_error"]}), "folded_profile.txt", "app_download_folded")
-    render_frequency_evidence("l1", result)
 
 
 def render_file_preview(prefix: str) -> None:
@@ -3845,11 +4103,11 @@ def render_file_preview(prefix: str) -> None:
         if not preview.empty:
             with preview_cols[0]:
                 st.caption("File preview")
-                st.dataframe(preview, use_container_width=True, hide_index=True, height=300)
+                st.dataframe(preview, width="stretch", hide_index=True, height=300)
         with preview_cols[1]:
             st.plotly_chart(
                 raw_preview_figure(file_bytes, filename, prefix),
-                use_container_width=True,
+                width="stretch",
             )
     except ValueError as exc:
         st.error(str(exc))
@@ -3869,24 +4127,23 @@ def render_secondary_outputs(result: dict | None) -> None:
             metric_cols[2].metric("AIC", f"{float(summary.get('AIC', 0.0)):.5g}")
             metric_cols[3].metric("BIC", f"{float(summary.get('BIC', 0.0)):.5g}")
         cols = st.columns([1.2, 1.0])
-        cols[0].plotly_chart(periodogram(result, "residual_power", "residual_peaks", "After prewhitening"), use_container_width=True)
+        cols[0].plotly_chart(periodogram(result, "residual_power", "residual_peaks", "After prewhitening"), width="stretch")
         with cols[1]:
             st.caption("Prewhitening steps")
-            st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), width="stretch", hide_index=True)
             if result.get("prewhitening_terms"):
                 st.caption("Prewhitening fit equation")
                 st.code(fit_equation_text(result.get("prewhitening_terms", []), variable="t_shifted"), language="text")
                 st.caption("Global prewhitening fit summary")
-                st.dataframe(global_fit_summary(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
+                st.dataframe(global_fit_summary(result.get("prewhitening_terms", [])), width="stretch", hide_index=True)
                 with st.expander("Prewhitening quality diagnostics", expanded=False):
-                    st.dataframe(prewhitening_summary_dataframe(result.get("prewhitening_summary", {})), use_container_width=True, hide_index=True)
+                    st.dataframe(prewhitening_summary_dataframe(result.get("prewhitening_summary", {})), width="stretch", hide_index=True)
             st.caption("Remaining LS peaks after prewhitening")
-            st.dataframe(peaks_dataframe(result.get("residual_peaks", [])), use_container_width=True, hide_index=True)
-        render_prewhitening_evidence()
+            st.dataframe(peaks_dataframe(result.get("residual_peaks", [])), width="stretch", hide_index=True)
     if st.session_state.get("app_show_model") and result.get("has_prewhitening"):
         st.plotly_chart(
             prewhitening_model_plot(result, st.session_state.get("l1_show_model_errors", True)),
-            use_container_width=True,
+            width="stretch",
         )
     advanced = st.session_state.get("app_advanced_result")
     if advanced:
@@ -3894,8 +4151,7 @@ def render_secondary_outputs(result: dict | None) -> None:
         st.subheader("Period tomography")
         if advanced.get("message"):
             st.warning(str(advanced["message"]))
-        st.plotly_chart(advanced_plot(advanced), use_container_width=True)
-        render_tomography_evidence("l1")
+        st.plotly_chart(advanced_plot(advanced), width="stretch")
 
 
 def model_parameter_value(model_result: dict, name: str) -> float | None:
@@ -4113,11 +4369,11 @@ def render_model_lab_outputs(result: dict | None) -> None:
     st.divider()
     st.subheader("Model laboratory")
     if model_result.get("family") == "fourier":
-        st.plotly_chart(model_lab_fourier_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_fourier_plot(model_result, result), width="stretch")
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+                width="stretch",
             )
         info_cols = st.columns(4)
         info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
@@ -4129,21 +4385,21 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Fourier model equation")
             st.code(fit_equation_text(model_result.get("terms", []), variable="phase"), language="text")
             st.caption("Fit terms")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), width="stretch", hide_index=True)
         with cols[1]:
             st.caption("Global Fourier fit summary")
-            st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("summary", {})])), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("summary", {})])), width="stretch", hide_index=True)
             st.caption("Harmonic-order comparison")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("trials", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("trials", []))), width="stretch", hide_index=True)
             st.caption("Model maxima")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), width="stretch", hide_index=True)
         prefix_name = "fourier"
     elif model_result.get("family") == "binary":
-        st.plotly_chart(model_lab_binary_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_binary_plot(model_result, result), width="stretch")
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+                width="stretch",
             )
         info_cols = st.columns(4)
         info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
@@ -4157,15 +4413,15 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Binary model formula")
             st.code(str(model_result.get("formula", "")), language="text")
             st.caption("Fit parameters")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), width="stretch", hide_index=True)
         with cols[1]:
             st.caption("Global binary fit summary")
-            st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame([summary])), width="stretch", hide_index=True)
             st.caption("Model extrema / eclipse phases")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), width="stretch", hide_index=True)
         prefix_name = "binary"
     elif model_result.get("family") == "binary_assistant":
-        st.plotly_chart(model_lab_binary_assistant_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_binary_assistant_plot(model_result, result), width="stretch")
         summary = model_result.get("summary", {})
         info_cols = st.columns(4)
         period_value = model_result.get("period")
@@ -4176,21 +4432,21 @@ def render_model_lab_outputs(result: dict | None) -> None:
         ratio = summary.get("depth_ratio")
         info_cols[3].metric("Depth ratio", "" if ratio is None else f"{float(ratio):.4g}")
         st.caption("Binary interpretation diagnostics")
-        st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), use_container_width=True, hide_index=True)
+        st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), width="stretch", hide_index=True)
         st.caption("Pedagogical hints")
         for hint in model_result.get("hints", []):
             st.markdown(f"- {hint}")
         prefix_name = "binary_assistant"
     elif model_result.get("family") == "bondi_hoyle":
-        st.plotly_chart(model_lab_bondi_hoyle_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_bondi_hoyle_plot(model_result, result), width="stretch")
         with st.expander("Orbital-flow and validity diagnostics", expanded=True):
-            st.plotly_chart(model_lab_bondi_hoyle_diagnostics_plot(model_result), use_container_width=True)
+            st.plotly_chart(model_lab_bondi_hoyle_diagnostics_plot(model_result), width="stretch")
             if model_result.get("mdot_msun_yr_phase"):
-                st.plotly_chart(model_lab_bondi_hoyle_physical_plot(model_result), use_container_width=True)
+                st.plotly_chart(model_lab_bondi_hoyle_physical_plot(model_result), width="stretch")
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+                width="stretch",
             )
         summary = model_result.get("summary", {})
         info_cols = st.columns(5)
@@ -4205,43 +4461,43 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Bondi-Hoyle formulation")
             st.code(str(model_result.get("formula", "")), language="text")
             st.caption("Fit parameters")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), width="stretch", hide_index=True)
         with cols[1]:
             st.caption("Global Bondi-Hoyle fit summary")
-            st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame([summary])), width="stretch", hide_index=True)
             st.caption("Observable maxima")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), width="stretch", hide_index=True)
         comparison_cols = st.columns(2)
         with comparison_cols[0]:
             st.caption("Model comparison")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("model_comparison", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("model_comparison", []))), width="stretch", hide_index=True)
         with comparison_cols[1]:
             names = summary.get("nonlinear_parameter_names", [])
             correlation = summary.get("correlation_matrix", [])
             st.caption("Local parameter correlation")
             if names and correlation:
-                st.dataframe(pd.DataFrame(correlation, index=names, columns=names), use_container_width=True)
+                st.dataframe(pd.DataFrame(correlation, index=names, columns=names), width="stretch")
             else:
                 st.info("No nonlinear covariance matrix is available for this fit.")
             bootstrap_intervals = summary.get("bootstrap_intervals", {})
             if bootstrap_intervals:
                 st.caption("Residual-bootstrap intervals")
                 bootstrap_rows = [{"parameter": name, **values} for name, values in bootstrap_intervals.items()]
-                st.dataframe(clean_dataframe(pd.DataFrame(bootstrap_rows)), use_container_width=True, hide_index=True)
+                st.dataframe(clean_dataframe(pd.DataFrame(bootstrap_rows)), width="stretch", hide_index=True)
         prefix_name = "bondi_hoyle"
     elif model_result.get("family") == "pulse":
         render_barycentric_status(result, pulse_context=True)
-        st.plotly_chart(model_lab_pulse_profile_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_pulse_profile_plot(model_result, result), width="stretch")
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+                width="stretch",
             )
         cols_plots = st.columns(2)
         with cols_plots[0]:
-            st.plotly_chart(model_lab_pulse_epoch_plot(model_result, result), use_container_width=True)
+            st.plotly_chart(model_lab_pulse_epoch_plot(model_result, result), width="stretch")
         with cols_plots[1]:
-            st.plotly_chart(model_lab_pulse_oc_plot(model_result, result), use_container_width=True)
+            st.plotly_chart(model_lab_pulse_oc_plot(model_result, result), width="stretch")
         summary = model_result.get("summary", {})
         info_cols = st.columns(4)
         info_cols[0].metric("Pulse period", f"{float(model_result['period']):.8g} {result.get('period_unit', '')}")
@@ -4254,22 +4510,22 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Pulse-shape formula")
             st.code(str(model_result.get("formula", "")), language="text")
             st.caption("Pulse-shape terms")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), width="stretch", hide_index=True)
             if model_result.get("oc_formula"):
                 st.caption("Orbital Roemer-delay formula")
                 st.code(str(model_result.get("oc_formula", "")), language="text")
                 st.caption("Orbital timing parameters")
-                st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("oc_parameters", []))), use_container_width=True, hide_index=True)
+                st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("oc_parameters", []))), width="stretch", hide_index=True)
         with cols[1]:
             st.caption("Global pulse fit summary")
-            st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame([summary])), width="stretch", hide_index=True)
             if model_result.get("spin_summary"):
                 st.caption("Spin ephemeris (candidate phase connection)")
-                st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("spin_summary", {})])), use_container_width=True, hide_index=True)
+                st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("spin_summary", {})])), width="stretch", hide_index=True)
             st.caption("Pulse maxima")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), width="stretch", hide_index=True)
             st.caption("Candidate template phase-zero TOAs")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("arrivals", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("arrivals", []))), width="stretch", hide_index=True)
         dl_extra_cols = st.columns(2)
         with dl_extra_cols[0]:
             dataframe_download(
@@ -4292,7 +4548,6 @@ def render_model_lab_outputs(result: dict | None) -> None:
         prefix_name = "pulse"
     else:
         return
-    render_model_lab_evidence(model_result)
     phase_model_download = {
         "phase": model_result.get("model_phase", []),
         "model_flux": model_result.get("model_flux", []),
@@ -4349,11 +4604,11 @@ def render_model_lab_outputs(result: dict | None) -> None:
 def layout_one() -> None:
     prefix = "l1"
     st.title("Periodicity Workbench")
-    st.caption(f"Version {APP_VERSION}")
+    st.caption(f"Guided light-curve analysis and student evidence workflow - Version {APP_VERSION}")
     with st.sidebar:
-        with st.expander("Input", expanded=True):
+        with st.expander("Input", expanded=False):
             input_controls(prefix, st)
-        with st.expander("Frequency Search", expanded=True):
+        with st.expander("Frequency Search", expanded=False):
             search_controls(prefix, st)
             st.divider()
             st.markdown("**Uncertainties**")
@@ -4371,7 +4626,7 @@ def layout_one() -> None:
             model_lab_controls(prefix, st)
         with st.expander("Generate report", expanded=False):
             report_controls(prefix, st)
-        if st.button("Help", use_container_width=True, key=f"{prefix}_show_help"):
+        if st.button("Help", width="stretch", key=f"{prefix}_show_help"):
             st.session_state["app_show_help"] = True
             st.session_state["app_show_bibliography"] = False
             st.rerun()
@@ -4386,6 +4641,7 @@ def layout_one() -> None:
     render_search_outputs(result)
     render_secondary_outputs(result)
     render_model_lab_outputs(result)
+    render_student_workflow_notebook(result)
 
 st.sidebar.header("Analysis controls")
 
