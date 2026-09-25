@@ -15,6 +15,7 @@ Current version: `1.8.0`.
 - Voluntary report sections enabled only after their corresponding analyses exist.
 - Reliable VIU branding and `12MAST AG2` / `Student - Course` footer decoration on every generated PDF page.
 - All analysis-step expanders start closed for a compact, progressive workflow.
+- Streamlit Community Cloud compatibility for FITS metadata tables and current widget/width APIs, with bounded Streamlit, pandas, and PyArrow dependency ranges.
 
 ## Version 1.7 Scientific Model Highlights
 
@@ -123,6 +124,11 @@ streamlit_app.py
 ```
 
 The default bootstrap count is 1000. For interactive exploration, use 50-200 first, then increase for final values.
+
+The dependency ranges in `requirements.txt` intentionally match the tested
+Streamlit Community Cloud stack. In particular, PyArrow is kept below version
+25 because that release is replaced by the platform due to a known upstream
+segmentation fault.
 
 ## Notes
 

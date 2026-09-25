@@ -168,7 +168,7 @@ HELP_FILE = "HELP.md"
 
 
 def return_from_help_button(key: str) -> None:
-    if st.button("Back to analysis", use_container_width=True, key=key):
+    if st.button("Back to analysis", width="stretch", key=key):
         st.session_state["app_show_help"] = False
         st.rerun()
 
@@ -187,7 +187,7 @@ def render_help_document() -> None:
 
 
 def return_from_bibliography_button(key: str) -> None:
-    if st.button("Back to analysis", use_container_width=True, key=key):
+    if st.button("Back to analysis", width="stretch", key=key):
         st.session_state["app_show_bibliography"] = False
         st.rerun()
 
@@ -304,7 +304,7 @@ def render_bibliography_search(prefix: str = "l1") -> None:
             }
             for row in rows
         ])
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.dataframe(table, width="stretch", hide_index=True)
         st.markdown("**Abstract snippets**")
         for index, row in enumerate(rows[:10], start=1):
             with st.expander(f"{index}. {row['title']}", expanded=False):
@@ -504,29 +504,28 @@ def render_fits_selector(prefix: str, file_bytes: bytes, filename: str) -> None:
     error_options = ["None"] + column_names
     error_value = st.session_state.get(f"{prefix}_fits_error_col", "None")
     if error_value not in error_options:
-        error_value = "None"
+        st.session_state[f"{prefix}_fits_error_col"] = "None"
     cols[2].selectbox(
         "Error column",
         options=error_options,
-        index=error_options.index(error_value),
         disabled=not bool(st.session_state.get(f"{prefix}_use_error", True)),
         key=f"{prefix}_fits_error_col",
     )
     st.dataframe(
         pd.DataFrame(column_rows),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=180,
     )
     timing_metadata = fits_timing_metadata(file_bytes, int(selected_extension), str(st.session_state[f"{prefix}_fits_time_col"]))
     timing_rows = [
-        {"keyword": key.upper(), "value": timing_metadata.get(key)}
+        {"keyword": key.upper(), "value": str(timing_metadata.get(key))}
         for key in ["timesys", "timeref", "tassign", "timeunit", "mjdref", "mjdrefi", "mjdreff", "plephem"]
         if timing_metadata.get(key) is not None
     ]
     if timing_rows:
         with st.expander("FITS timing metadata", expanded=False):
-            st.dataframe(pd.DataFrame(timing_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(timing_rows), width="stretch", hide_index=True)
     else:
         st.warning("This FITS table does not expose standard barycentric timing keywords. Auto mode will attempt a geocentric approximation after coordinates are provided.")
 
@@ -772,7 +771,7 @@ def dataframe_download(label: str, df: pd.DataFrame, filename: str, key: str) ->
         file_name=filename,
         mime="text/plain",
         key=key,
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1081,7 +1080,7 @@ def render_student_workflow_notebook(result: dict | None) -> None:
         pd.DataFrame(
             [{"Status": "Complete" if row["complete"] else "Pending", "Stage": row["step"], "Evidence required": row["detail"]} for row in status]
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -3012,7 +3011,7 @@ def input_controls(prefix: str, location=st) -> None:
     target_cols = location.columns([0.62, 0.38])
     target_name = target_cols[0].text_input("Object name", key=f"{prefix}_target_name", placeholder="e.g. 4U 2206+54")
     target_cols[1].markdown("<div style='height: 1.78rem'></div>", unsafe_allow_html=True)
-    if target_cols[1].button("SIMBAD search", use_container_width=True, key=f"{prefix}_resolve_target"):
+    if target_cols[1].button("SIMBAD search", width="stretch", key=f"{prefix}_resolve_target"):
         try:
             ra_deg, dec_deg, resolved = resolve_target_name(str(st.session_state.get(f"{prefix}_target_name", "")))
         except Exception as exc:
@@ -3040,7 +3039,7 @@ def input_controls(prefix: str, location=st) -> None:
     )
     if location.button(
         "Bibliographic Search",
-        use_container_width=True,
+        width="stretch",
         key=f"{prefix}_show_bibliography_input",
         disabled=not target_ready,
         help="Resolve the object with SIMBAD before searching bibliography." if not target_ready else "Search literature mentioning time series, periods, periodicity, timing, or variability.",
@@ -3054,13 +3053,13 @@ def input_controls(prefix: str, location=st) -> None:
     limit_cols[1].text_input("xmax", value=st.session_state.get(f"{prefix}_xmax", ""), key=f"{prefix}_xmax", placeholder="auto")
     limit_cols[2].text_input("ymin", value=st.session_state.get(f"{prefix}_ymin", ""), key=f"{prefix}_ymin", placeholder="auto")
     limit_cols[3].text_input("ymax", value=st.session_state.get(f"{prefix}_ymax", ""), key=f"{prefix}_ymax", placeholder="auto")
-    if location.button("Clear workspace", use_container_width=True, key=f"{prefix}_clear"):
+    if location.button("Clear workspace", width="stretch", key=f"{prefix}_clear"):
         clear_state(reset_file=True)
         st.rerun()
 
 
 def search_controls(prefix: str, location=st) -> None:
-    if location.button("Run analysis", type="primary", use_container_width=True, key=f"{prefix}_run"):
+    if location.button("Run analysis", type="primary", width="stretch", key=f"{prefix}_run"):
         run_analysis_action(prefix, location)
     time_unit = st.session_state.get(f"{prefix}_time_unit", "days")
     suggestion = None
@@ -3088,7 +3087,7 @@ def search_controls(prefix: str, location=st) -> None:
         labels = axis_labels(time_unit)
         frequency_unit = "Hz" if labels["baseline"] == "s" else "cycles/day"
         location.info(f"{suggestion[2]}\n\nSuggested range: {suggestion[0]:.6g} - {suggestion[1]:.6g} {frequency_unit}.")
-        if location.button("Use suggested frequency range", use_container_width=True, key=f"{prefix}_use_suggested_frequency"):
+        if location.button("Use suggested frequency range", width="stretch", key=f"{prefix}_use_suggested_frequency"):
             st.session_state[f"{prefix}_fmin"] = float(suggestion[0])
             st.session_state[f"{prefix}_fmax"] = float(suggestion[1])
             st.rerun()
@@ -3109,7 +3108,7 @@ def uncertainty_controls(prefix: str, location=st) -> None:
     cols = location.columns(2)
     cols[0].number_input("Bootstrap iterations", min_value=0, value=st.session_state.get(f"{prefix}_bootstrap", 1000), step=50, key=f"{prefix}_bootstrap")
     cols[1].number_input("Bootstrap local width", min_value=0.001, value=st.session_state.get(f"{prefix}_bootstrap_width", 0.03), step=0.001, format="%.3f", key=f"{prefix}_bootstrap_width")
-    if location.button("Update uncertainties", use_container_width=True, key=f"{prefix}_update_uncertainties"):
+    if location.button("Update uncertainties", width="stretch", key=f"{prefix}_update_uncertainties"):
         if "app_file_bytes" not in st.session_state:
             location.error("Upload a file and run the analysis first.")
         else:
@@ -3142,7 +3141,7 @@ def manual_exclusion_controls(prefix: str, location=st) -> None:
     location.number_input("Manual exclusion tolerance", min_value=0.001, value=st.session_state.get(f"{prefix}_exclusion_tolerance", 0.015), step=0.001, format="%.3f", key=f"{prefix}_exclusion_tolerance")
     if excluded:
         location.caption("Excluded: " + ", ".join(f"{period:.4g} {period_unit}" for period in st.session_state[f"{prefix}_excluded_periods"]))
-    if location.button("Apply exclusions", use_container_width=True, key=f"{prefix}_apply_exclusions"):
+    if location.button("Apply exclusions", width="stretch", key=f"{prefix}_apply_exclusions"):
         if "app_file_bytes" not in st.session_state:
             location.error("Upload a file and run the analysis first.")
         else:
@@ -3203,7 +3202,7 @@ def folded_controls(prefix: str, location=st) -> None:
         "display-optimized": "Folded-display fit with amplitude and offset matched to an adaptive outer data range; prewhitening subtraction remains standard.",
     }
     location.caption(fit_help[fit_method])
-    if location.button("Update folded profile", use_container_width=True, key=f"{prefix}_update_fold"):
+    if location.button("Update folded profile", width="stretch", key=f"{prefix}_update_fold"):
         current_result = st.session_state.get("app_result")
         if not current_result:
             location.error("Run an analysis first.")
@@ -3251,7 +3250,7 @@ def prewhitening_controls(prefix: str, location=st) -> None:
     if st.session_state.get("app_prewhitening_periods"):
         location.caption("Chain: " + ", ".join(f"{p:.4g} {period_unit}" for p in st.session_state["app_prewhitening_periods"]))
     cols = location.columns(3)
-    if cols[0].button("Next step", use_container_width=True, key=f"{prefix}_next_step"):
+    if cols[0].button("Next step", width="stretch", key=f"{prefix}_next_step"):
         period_to_add = selected_period
         if manual_period_text.strip():
             try:
@@ -3285,11 +3284,11 @@ def prewhitening_controls(prefix: str, location=st) -> None:
                 st.session_state.get(f"{prefix}_next_prewhitening_select_version", 0) + 1
             )
             st.rerun()
-    if cols[1].button("Show model", use_container_width=True, key=f"{prefix}_show_model"):
+    if cols[1].button("Show model", width="stretch", key=f"{prefix}_show_model"):
         st.session_state["app_show_model"] = True
         st.rerun()
     location.checkbox("Show errors", value=True, key=f"{prefix}_show_model_errors")
-    if cols[2].button("Clear chain", use_container_width=True, key=f"{prefix}_clear_chain"):
+    if cols[2].button("Clear chain", width="stretch", key=f"{prefix}_clear_chain"):
         st.session_state["app_prewhitening_periods"] = []
         st.session_state["app_show_model"] = False
         st.session_state[f"{prefix}_next_prewhitening_select_version"] = (
@@ -3376,7 +3375,7 @@ def advanced_controls(prefix: str, location=st) -> None:
         st.session_state[f"{prefix}_advanced_metric"] = "WWZ"
         location.number_input("WWZ decay", min_value=0.0001, value=st.session_state.get(f"{prefix}_advanced_wwz_decay", 0.0125), step=0.0025, format="%.5f", key=f"{prefix}_advanced_wwz_decay")
     show_track = location.checkbox("Show best period track", value=True, key=f"{prefix}_advanced_track")
-    if location.button("Build tomogram", use_container_width=True, key=f"{prefix}_run_advanced"):
+    if location.button("Build tomogram", width="stretch", key=f"{prefix}_run_advanced"):
         if not result:
             location.error("Run an analysis first.")
         else:
@@ -3418,7 +3417,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
     default_period = result.get("folded_period") or result.get("primary_period") or ""
     if family == "Binary interpretation assistant":
         location.caption("Compact folded-profile diagnostics for eclipsing-binary morphology, half-period ambiguity, and minimum spacing.")
-        if location.button("Run binary assistant", use_container_width=True, key=f"{prefix}_run_binary_assistant"):
+        if location.button("Run binary assistant", width="stretch", key=f"{prefix}_run_binary_assistant"):
             try:
                 st.session_state["app_model_lab_result"] = binary_interpretation_assistant(result)
             except ValueError as exc:
@@ -3507,7 +3506,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
             value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
             key=f"{prefix}_model_lab_show_time_model",
         )
-        if location.button("Run pulse analysis", use_container_width=True, key=f"{prefix}_fit_pulse_model"):
+        if location.button("Run pulse analysis", width="stretch", key=f"{prefix}_fit_pulse_model"):
             fields = fields_from_state(prefix, bootstrap_override=0)
             fields.update({
                 "model_lab_pulse_period": str(st.session_state.get(f"{prefix}_model_lab_pulse_period", "")).strip(),
@@ -3578,7 +3577,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
             value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
             key=f"{prefix}_model_lab_show_time_model",
         )
-        if location.button("Fit Fourier model", use_container_width=True, key=f"{prefix}_fit_fourier_model"):
+        if location.button("Fit Fourier model", width="stretch", key=f"{prefix}_fit_fourier_model"):
             fields = fields_from_state(prefix, bootstrap_override=0)
             fields.update({
                 "model_lab_period": str(st.session_state.get(f"{prefix}_model_lab_period", "")).strip(),
@@ -3714,7 +3713,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
             value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
             key=f"{prefix}_model_lab_show_time_model",
         )
-        if location.button("Fit Bondi-Hoyle model", use_container_width=True, key=f"{prefix}_fit_bh_model"):
+        if location.button("Fit Bondi-Hoyle model", width="stretch", key=f"{prefix}_fit_bh_model"):
             fields = fields_from_state(prefix, bootstrap_override=0)
             fields.update({
                 "model_lab_bh_period": str(st.session_state.get(f"{prefix}_model_lab_bh_period", "")).strip(),
@@ -3897,7 +3896,7 @@ def model_lab_controls(prefix: str, location=st) -> None:
         value=st.session_state.get(f"{prefix}_model_lab_show_time_model", True),
         key=f"{prefix}_model_lab_show_time_model",
     )
-    if location.button("Fit binary model", use_container_width=True, key=f"{prefix}_fit_binary_model"):
+    if location.button("Fit binary model", width="stretch", key=f"{prefix}_fit_binary_model"):
         fields = fields_from_state(prefix, bootstrap_override=0)
         fields.update({
             "model_lab_binary_period": str(st.session_state.get(f"{prefix}_model_lab_binary_period", "")).strip(),
@@ -4024,7 +4023,7 @@ def report_controls(prefix: str, location=st) -> None:
             file_name=current_metadata["filename"],
             mime="application/pdf",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key=f"{prefix}_download_pdf_report",
         )
     except Exception as exc:
@@ -4060,10 +4059,10 @@ def render_search_outputs(result: dict | None) -> None:
     metric_cols[3].metric("T0", f"{float(result.get('t0', 0.0)):.4f}")
     render_barycentric_status(result)
     cols = st.columns(3)
-    cols[0].plotly_chart(periodogram(result, "power", "peaks", "Lomb-Scargle periodogram"), use_container_width=True)
-    cols[1].plotly_chart(window_plot(result), use_container_width=True)
+    cols[0].plotly_chart(periodogram(result, "power", "peaks", "Lomb-Scargle periodogram"), width="stretch")
+    cols[1].plotly_chart(window_plot(result), width="stretch")
     with cols[2]:
-        st.plotly_chart(folded_plot(result), use_container_width=True)
+        st.plotly_chart(folded_plot(result), width="stretch")
     folded_terms = result.get("fold_fit_terms", [])
     if folded_terms:
         st.caption("Folded fit equation")
@@ -4071,17 +4070,17 @@ def render_search_outputs(result: dict | None) -> None:
         fit_cols = st.columns([0.8, 1.2])
         with fit_cols[0]:
             st.caption("Global fit summary")
-            st.dataframe(global_fit_summary(folded_terms), use_container_width=True, hide_index=True)
+            st.dataframe(global_fit_summary(folded_terms), width="stretch", hide_index=True)
         with fit_cols[1]:
             st.caption("Folded periods and fit parameters")
-            st.dataframe(folded_periods_and_parameters(result), use_container_width=True, hide_index=True)
+            st.dataframe(folded_periods_and_parameters(result), width="stretch", hide_index=True)
     st.subheader("Detected peaks")
-    st.dataframe(peaks_dataframe(result.get("peaks", [])), use_container_width=True, hide_index=True)
+    st.dataframe(peaks_dataframe(result.get("peaks", [])), width="stretch", hide_index=True)
     harmonic_rows = result.get("harmonic_diagnostics", [])
     if harmonic_rows:
         with st.expander("Harmonic diagnostics", expanded=False):
             st.caption("Checks the fundamental, harmonics, and longer multiples of the selected primary period. The 2P row is useful for eclipsing-binary half-period ambiguity.")
-            st.dataframe(harmonic_diagnostics_dataframe(harmonic_rows), use_container_width=True, hide_index=True)
+            st.dataframe(harmonic_diagnostics_dataframe(harmonic_rows), width="stretch", hide_index=True)
     dl_cols = st.columns(3)
     with dl_cols[0]:
         dataframe_download("Download LS data", pd.DataFrame({"period": result["series"]["period"], "frequency": result["series"]["frequency"], "power": result["series"]["power"]}), "lomb_scargle_periodogram.txt", "app_download_ls")
@@ -4104,11 +4103,11 @@ def render_file_preview(prefix: str) -> None:
         if not preview.empty:
             with preview_cols[0]:
                 st.caption("File preview")
-                st.dataframe(preview, use_container_width=True, hide_index=True, height=300)
+                st.dataframe(preview, width="stretch", hide_index=True, height=300)
         with preview_cols[1]:
             st.plotly_chart(
                 raw_preview_figure(file_bytes, filename, prefix),
-                use_container_width=True,
+                width="stretch",
             )
     except ValueError as exc:
         st.error(str(exc))
@@ -4128,23 +4127,23 @@ def render_secondary_outputs(result: dict | None) -> None:
             metric_cols[2].metric("AIC", f"{float(summary.get('AIC', 0.0)):.5g}")
             metric_cols[3].metric("BIC", f"{float(summary.get('BIC', 0.0)):.5g}")
         cols = st.columns([1.2, 1.0])
-        cols[0].plotly_chart(periodogram(result, "residual_power", "residual_peaks", "After prewhitening"), use_container_width=True)
+        cols[0].plotly_chart(periodogram(result, "residual_power", "residual_peaks", "After prewhitening"), width="stretch")
         with cols[1]:
             st.caption("Prewhitening steps")
-            st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(result.get("prewhitening_terms", []))), width="stretch", hide_index=True)
             if result.get("prewhitening_terms"):
                 st.caption("Prewhitening fit equation")
                 st.code(fit_equation_text(result.get("prewhitening_terms", []), variable="t_shifted"), language="text")
                 st.caption("Global prewhitening fit summary")
-                st.dataframe(global_fit_summary(result.get("prewhitening_terms", [])), use_container_width=True, hide_index=True)
+                st.dataframe(global_fit_summary(result.get("prewhitening_terms", [])), width="stretch", hide_index=True)
                 with st.expander("Prewhitening quality diagnostics", expanded=False):
-                    st.dataframe(prewhitening_summary_dataframe(result.get("prewhitening_summary", {})), use_container_width=True, hide_index=True)
+                    st.dataframe(prewhitening_summary_dataframe(result.get("prewhitening_summary", {})), width="stretch", hide_index=True)
             st.caption("Remaining LS peaks after prewhitening")
-            st.dataframe(peaks_dataframe(result.get("residual_peaks", [])), use_container_width=True, hide_index=True)
+            st.dataframe(peaks_dataframe(result.get("residual_peaks", [])), width="stretch", hide_index=True)
     if st.session_state.get("app_show_model") and result.get("has_prewhitening"):
         st.plotly_chart(
             prewhitening_model_plot(result, st.session_state.get("l1_show_model_errors", True)),
-            use_container_width=True,
+            width="stretch",
         )
     advanced = st.session_state.get("app_advanced_result")
     if advanced:
@@ -4152,7 +4151,7 @@ def render_secondary_outputs(result: dict | None) -> None:
         st.subheader("Period tomography")
         if advanced.get("message"):
             st.warning(str(advanced["message"]))
-        st.plotly_chart(advanced_plot(advanced), use_container_width=True)
+        st.plotly_chart(advanced_plot(advanced), width="stretch")
 
 
 def model_parameter_value(model_result: dict, name: str) -> float | None:
@@ -4370,11 +4369,11 @@ def render_model_lab_outputs(result: dict | None) -> None:
     st.divider()
     st.subheader("Model laboratory")
     if model_result.get("family") == "fourier":
-        st.plotly_chart(model_lab_fourier_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_fourier_plot(model_result, result), width="stretch")
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+                width="stretch",
             )
         info_cols = st.columns(4)
         info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
@@ -4386,21 +4385,21 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Fourier model equation")
             st.code(fit_equation_text(model_result.get("terms", []), variable="phase"), language="text")
             st.caption("Fit terms")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), width="stretch", hide_index=True)
         with cols[1]:
             st.caption("Global Fourier fit summary")
-            st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("summary", {})])), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("summary", {})])), width="stretch", hide_index=True)
             st.caption("Harmonic-order comparison")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("trials", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("trials", []))), width="stretch", hide_index=True)
             st.caption("Model maxima")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), width="stretch", hide_index=True)
         prefix_name = "fourier"
     elif model_result.get("family") == "binary":
-        st.plotly_chart(model_lab_binary_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_binary_plot(model_result, result), width="stretch")
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+                width="stretch",
             )
         info_cols = st.columns(4)
         info_cols[0].metric("Model period", f"{float(model_result['period']):.6g} {result.get('period_unit', '')}")
@@ -4414,15 +4413,15 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Binary model formula")
             st.code(str(model_result.get("formula", "")), language="text")
             st.caption("Fit parameters")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), width="stretch", hide_index=True)
         with cols[1]:
             st.caption("Global binary fit summary")
-            st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame([summary])), width="stretch", hide_index=True)
             st.caption("Model extrema / eclipse phases")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), width="stretch", hide_index=True)
         prefix_name = "binary"
     elif model_result.get("family") == "binary_assistant":
-        st.plotly_chart(model_lab_binary_assistant_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_binary_assistant_plot(model_result, result), width="stretch")
         summary = model_result.get("summary", {})
         info_cols = st.columns(4)
         period_value = model_result.get("period")
@@ -4433,21 +4432,21 @@ def render_model_lab_outputs(result: dict | None) -> None:
         ratio = summary.get("depth_ratio")
         info_cols[3].metric("Depth ratio", "" if ratio is None else f"{float(ratio):.4g}")
         st.caption("Binary interpretation diagnostics")
-        st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), use_container_width=True, hide_index=True)
+        st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), width="stretch", hide_index=True)
         st.caption("Pedagogical hints")
         for hint in model_result.get("hints", []):
             st.markdown(f"- {hint}")
         prefix_name = "binary_assistant"
     elif model_result.get("family") == "bondi_hoyle":
-        st.plotly_chart(model_lab_bondi_hoyle_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_bondi_hoyle_plot(model_result, result), width="stretch")
         with st.expander("Orbital-flow and validity diagnostics", expanded=True):
-            st.plotly_chart(model_lab_bondi_hoyle_diagnostics_plot(model_result), use_container_width=True)
+            st.plotly_chart(model_lab_bondi_hoyle_diagnostics_plot(model_result), width="stretch")
             if model_result.get("mdot_msun_yr_phase"):
-                st.plotly_chart(model_lab_bondi_hoyle_physical_plot(model_result), use_container_width=True)
+                st.plotly_chart(model_lab_bondi_hoyle_physical_plot(model_result), width="stretch")
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+                width="stretch",
             )
         summary = model_result.get("summary", {})
         info_cols = st.columns(5)
@@ -4462,43 +4461,43 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Bondi-Hoyle formulation")
             st.code(str(model_result.get("formula", "")), language="text")
             st.caption("Fit parameters")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("parameters", []))), width="stretch", hide_index=True)
         with cols[1]:
             st.caption("Global Bondi-Hoyle fit summary")
-            st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame([summary])), width="stretch", hide_index=True)
             st.caption("Observable maxima")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("extrema", []))), width="stretch", hide_index=True)
         comparison_cols = st.columns(2)
         with comparison_cols[0]:
             st.caption("Model comparison")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("model_comparison", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("model_comparison", []))), width="stretch", hide_index=True)
         with comparison_cols[1]:
             names = summary.get("nonlinear_parameter_names", [])
             correlation = summary.get("correlation_matrix", [])
             st.caption("Local parameter correlation")
             if names and correlation:
-                st.dataframe(pd.DataFrame(correlation, index=names, columns=names), use_container_width=True)
+                st.dataframe(pd.DataFrame(correlation, index=names, columns=names), width="stretch")
             else:
                 st.info("No nonlinear covariance matrix is available for this fit.")
             bootstrap_intervals = summary.get("bootstrap_intervals", {})
             if bootstrap_intervals:
                 st.caption("Residual-bootstrap intervals")
                 bootstrap_rows = [{"parameter": name, **values} for name, values in bootstrap_intervals.items()]
-                st.dataframe(clean_dataframe(pd.DataFrame(bootstrap_rows)), use_container_width=True, hide_index=True)
+                st.dataframe(clean_dataframe(pd.DataFrame(bootstrap_rows)), width="stretch", hide_index=True)
         prefix_name = "bondi_hoyle"
     elif model_result.get("family") == "pulse":
         render_barycentric_status(result, pulse_context=True)
-        st.plotly_chart(model_lab_pulse_profile_plot(model_result, result), use_container_width=True)
+        st.plotly_chart(model_lab_pulse_profile_plot(model_result, result), width="stretch")
         if st.session_state.get("l1_model_lab_show_time_model", True):
             st.plotly_chart(
                 model_lab_time_plot(model_result, result, st.session_state.get("l1_show_model_errors", True)),
-                use_container_width=True,
+                width="stretch",
             )
         cols_plots = st.columns(2)
         with cols_plots[0]:
-            st.plotly_chart(model_lab_pulse_epoch_plot(model_result, result), use_container_width=True)
+            st.plotly_chart(model_lab_pulse_epoch_plot(model_result, result), width="stretch")
         with cols_plots[1]:
-            st.plotly_chart(model_lab_pulse_oc_plot(model_result, result), use_container_width=True)
+            st.plotly_chart(model_lab_pulse_oc_plot(model_result, result), width="stretch")
         summary = model_result.get("summary", {})
         info_cols = st.columns(4)
         info_cols[0].metric("Pulse period", f"{float(model_result['period']):.8g} {result.get('period_unit', '')}")
@@ -4511,22 +4510,22 @@ def render_model_lab_outputs(result: dict | None) -> None:
             st.caption("Pulse-shape formula")
             st.code(str(model_result.get("formula", "")), language="text")
             st.caption("Pulse-shape terms")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("terms", []))), width="stretch", hide_index=True)
             if model_result.get("oc_formula"):
                 st.caption("Orbital Roemer-delay formula")
                 st.code(str(model_result.get("oc_formula", "")), language="text")
                 st.caption("Orbital timing parameters")
-                st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("oc_parameters", []))), use_container_width=True, hide_index=True)
+                st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("oc_parameters", []))), width="stretch", hide_index=True)
         with cols[1]:
             st.caption("Global pulse fit summary")
-            st.dataframe(clean_dataframe(pd.DataFrame([summary])), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame([summary])), width="stretch", hide_index=True)
             if model_result.get("spin_summary"):
                 st.caption("Spin ephemeris (candidate phase connection)")
-                st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("spin_summary", {})])), use_container_width=True, hide_index=True)
+                st.dataframe(clean_dataframe(pd.DataFrame([model_result.get("spin_summary", {})])), width="stretch", hide_index=True)
             st.caption("Pulse maxima")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("maxima", []))), width="stretch", hide_index=True)
             st.caption("Candidate template phase-zero TOAs")
-            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("arrivals", []))), use_container_width=True, hide_index=True)
+            st.dataframe(clean_dataframe(pd.DataFrame(model_result.get("arrivals", []))), width="stretch", hide_index=True)
         dl_extra_cols = st.columns(2)
         with dl_extra_cols[0]:
             dataframe_download(
@@ -4627,7 +4626,7 @@ def layout_one() -> None:
             model_lab_controls(prefix, st)
         with st.expander("Generate report", expanded=False):
             report_controls(prefix, st)
-        if st.button("Help", use_container_width=True, key=f"{prefix}_show_help"):
+        if st.button("Help", width="stretch", key=f"{prefix}_show_help"):
             st.session_state["app_show_help"] = True
             st.session_state["app_show_bibliography"] = False
             st.rerun()
