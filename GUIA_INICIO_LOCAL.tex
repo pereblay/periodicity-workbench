@@ -1,0 +1,163 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+
+\definecolor{ink}{HTML}{1F2937}
+\definecolor{accent}{HTML}{176B87}
+\definecolor{codebg}{HTML}{F3F6F8}
+\definecolor{codeframe}{HTML}{D5E0E5}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accent,
+  urlcolor=accent,
+  pdftitle={Periodicity Workbench: guía de inicio local},
+  pdfauthor={}
+}
+
+\lstdefinestyle{terminal}{
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  showstringspaces=false,
+  framexleftmargin=5pt,
+  framexrightmargin=5pt,
+  aboveskip=7pt,
+  belowskip=9pt
+}
+\lstset{style=terminal}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Periodicity Workbench}
+\rhead{Guía de inicio local}
+\cfoot{\thepage}
+\setlength{\headheight}{14pt}
+
+\title{\textcolor{accent}{Periodicity Workbench}\\[3pt]
+\large Guía breve para instalar y ejecutar en local}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.2em}
+
+Esta guía explica cómo instalar Git y Python, descargar el proyecto e iniciar la aplicación en Windows o Linux. Streamlit y el resto de las bibliotecas se instalan desde el archivo \texttt{requirements.txt} del proyecto.
+
+\section{Instalar Git y Python}
+
+\subsection{Windows}
+\begin{enumerate}[leftmargin=*]
+  \item Instala \href{https://git-scm.com/install/win}{Git for Windows}.
+  \item Instala Python desde \href{https://www.python.org/downloads/}{python.org}. Python 3.12 o posterior es una buena opción.
+  \item Abre PowerShell y comprueba que ambos estén disponibles:
+\end{enumerate}
+
+\begin{lstlisting}
+git --version
+py --version
+\end{lstlisting}
+
+\subsection{Linux}
+Abre una terminal e instala Git, Python, \texttt{pip} y el soporte para entornos virtuales. Elige los comandos de tu distribución.
+
+\textbf{Ubuntu o Debian:}
+\begin{lstlisting}
+sudo apt update
+sudo apt install git python3 python3-venv python3-pip
+\end{lstlisting}
+
+\textbf{Fedora:}
+\begin{lstlisting}
+sudo dnf install git python3 python3-pip
+\end{lstlisting}
+
+Comprueba la instalación:
+\begin{lstlisting}
+git --version
+python3 --version
+\end{lstlisting}
+
+\section{Descargar el proyecto}
+
+En PowerShell o en la terminal de Linux, ve a la carpeta donde quieras guardar el proyecto y ejecuta:
+
+\begin{lstlisting}
+git clone https://github.com/pereblay/periodicity-workbench.git
+cd periodicity-workbench
+\end{lstlisting}
+
+\section{Crear un entorno e instalar las dependencias}
+
+Un entorno virtual mantiene las bibliotecas del proyecto separadas de las del resto del equipo.
+
+\textbf{Windows PowerShell:}
+\begin{lstlisting}
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+\end{lstlisting}
+
+\textbf{Linux:}
+\begin{lstlisting}
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+\end{lstlisting}
+
+La instalación puede tardar unos minutos. El archivo instala Streamlit y todas las bibliotecas necesarias para la aplicación.
+
+\section{Arrancar la aplicación}
+
+Con el entorno virtual activado y dentro de la carpeta \texttt{periodicity-workbench}, ejecuta:
+
+\begin{lstlisting}
+python -m streamlit run streamlit_app.py
+\end{lstlisting}
+
+Se abrirá el navegador. Si no se abre automáticamente, visita \href{http://localhost:8501}{http://localhost:8501}. Para detener la aplicación, vuelve a la terminal y pulsa \textbf{Ctrl+C}.
+
+\section{La próxima vez}
+
+No hace falta volver a clonar el proyecto ni instalar las bibliotecas. Entra en la carpeta del proyecto, activa el entorno y arranca la aplicación.
+
+\textbf{Windows PowerShell:}
+\begin{lstlisting}
+cd periodicity-workbench
+.\.venv\Scripts\Activate.ps1
+python -m streamlit run streamlit_app.py
+\end{lstlisting}
+
+\textbf{Linux:}
+\begin{lstlisting}[language=bash]
+cd periodicity-workbench
+source .venv/bin/activate
+python -m streamlit run streamlit_app.py
+\end{lstlisting}
+
+\section*{Si Linux no encuentra \texttt{venv}}
+
+En Ubuntu o Debian, instala el paquete que falta y vuelve a crear el entorno:
+\begin{lstlisting}[language=bash]
+sudo apt install python3-venv
+\end{lstlisting}
+
+\vfill
+\noindent\small Documentación oficial: \href{https://docs.streamlit.io/get-started/installation/command-line}{instalación de Streamlit}, \href{https://git-scm.com/install/win}{Git para Windows} y \href{https://git-scm.com/install/linux}{Git para Linux}.
+
+\end{document}

@@ -1,0 +1,132 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage[a4paper,margin=2.1cm]{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+
+\definecolor{accent}{HTML}{176B87}
+\definecolor{ink}{HTML}{263238}
+\definecolor{hint}{HTML}{EEF4F6}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent,
+  pdftitle={Guion de uso para estudiantes: Periodicity Workbench}}
+\setlist{leftmargin=*,itemsep=3pt,topsep=4pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Periodicity Workbench}
+\rhead{Guion para estudiantes}
+\cfoot{\thepage}
+\setlength{\headheight}{14pt}
+
+% Sube las imágenes a la carpeta "capturas" de Overleaf con estos nombres.
+% El documento compila aunque todavía no se hayan añadido las capturas.
+\newcommand{\captura}[2]{%
+  \begin{figure}[htbp]
+    \centering
+    \IfFileExists{capturas/#1}{%
+      \includegraphics[width=0.96\linewidth,height=0.43\textheight,keepaspectratio]{capturas/#1}%
+    }{%
+      \fcolorbox{accent}{hint}{\parbox[c][3.0cm][c]{0.88\linewidth}{\centering
+        Captura pendiente: \texttt{capturas/#1}}}%
+    }%
+    \caption{#2}
+  \end{figure}
+}
+
+\title{\textcolor{accent}{Guion de uso para estudiantes}\\[3pt]
+\large Análisis de curvas de luz con Periodicity Workbench}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.3em}
+
+\noindent\colorbox{hint}{\parbox{0.96\linewidth}{%
+\textbf{Objetivo.} Documentar cómo inspeccionas una curva, qué pruebas haces y por qué llegas a tu conclusión. La app reúne tus respuestas en un informe PDF. Escribe tus propias interpretaciones: una frecuencia alta o un pico marcado no bastan, por sí solos, para demostrar periodicidad.}}
+
+\section*{Antes de empezar}
+
+Abre la aplicación y, en \textbf{Input}, pulsa \textbf{Choose File}. Selecciona la curva de luz. Si el archivo es FITS, revisa la extensión y las columnas de tiempo, señal y error; en una tabla de texto, indica qué columnas contienen esos datos. Comprueba la vista previa antes de ejecutar el análisis.
+
+Como ejemplo se usa \texttt{xa\_saxj2103.5+4545\_d1 (1).lc}, una curva FITS de 98.006 filas con las columnas \texttt{TIME}, \texttt{RATE} y \texttt{ERROR}. La extensión es \texttt{.lc}, pero el contenido es FITS.
+
+\captura{01_inspeccionar_curva.jpg}{Carga del archivo, selección de columnas y vista previa de la curva.}
+
+\section{1. Inspeccionar la curva de luz}
+
+Antes de buscar periodos, observa la gráfica y escribe en \textbf{Comment on the appearance of the light curve}:
+\begin{itemize}
+  \item cómo se distribuyen las observaciones y cuánto tiempo abarcan;
+  \item si hay huecos, agrupaciones o cambios en la cobertura;
+  \item el nivel de dispersión, tendencias, valores extremos o posibles problemas instrumentales;
+  \item qué rasgos podrían confundirse con una señal periódica.
+\end{itemize}
+
+Describe lo que ves; deja las explicaciones físicas para la evaluación final.
+
+\section{2. Buscar y revisar bibliografía}
+
+En el panel \textbf{Input}, escribe el nombre del objeto. Usa \textbf{SIMBAD search} para resolverlo y luego pulsa \textbf{Bibliographic Search}. La app ofrece resultados automáticos de arXiv y enlaces a ADS y arXiv para ampliar la búsqueda.
+
+En \textbf{Relevant references and short reviews}, anota para cada referencia útil:
+\begin{itemize}
+  \item la cita o el enlace;
+  \item qué periodo, variabilidad o resultado relevante comunica;
+  \item cómo ayuda a interpretar tu análisis.
+\end{itemize}
+
+Prioriza las referencias relacionadas con la fuente y con medidas de periodicidad comparables.
+
+\captura{02_busqueda_bibliografica.jpg}{Resolución del objeto y acceso a la búsqueda bibliográfica.}
+
+\section{3. Analizar frecuencias y decidir}
+
+Abre \textbf{Frequency Search}. Define el intervalo de frecuencias que vas a estudiar y sus unidades. Para la curva de ejemplo puede usarse de \textbf{0,01 a 0,1 ciclos/día}. Para explorar, empieza con pocas iteraciones de bootstrap; puedes aumentarlas para el resultado final. Pulsa \textbf{Run analysis}.
+
+Revisa conjuntamente:
+\begin{itemize}
+  \item el periodograma Lomb--Scargle y los periodos de los picos;
+  \item la ventana de muestreo, que ayuda a reconocer artefactos y alias;
+  \item la significación y la incertidumbre que muestra la app;
+  \item el número de observaciones, la cobertura temporal y la calidad de los datos.
+\end{itemize}
+
+En el cuaderno de evidencias, elige una conclusión explícita: periodicidad fiable, ninguna periodicidad fiable o resultado inconcluso. Justifica la frecuencia elegida y comenta alias, armónicos y la posible ambigüedad entre \(P\) y \(2P\). No selecciones un pico solo porque sea el más alto.
+
+\captura{03_busqueda_y_picos.jpg}{Intervalo de búsqueda, periodograma, ventana de muestreo y tabla de picos.}
+
+\section{4. Estudiar el perfil plegado}
+
+Esta etapa es obligatoria cuando concluyes que hay una periodicidad fiable. Si el resultado es no fiable o inconcluso, la app la marca como no requerida.
+
+Abre \textbf{Folded Profile}, comprueba el periodo y el valor de \(T_0\), y elige el número de intervalos de fase. Pulsa \textbf{Update folded profile}. Interpreta la forma, la repetibilidad entre ciclos, máximos y mínimos, armónicos y cualquier simetría de dos ciclos que pueda indicar una ambigüedad \(P\)/\(2P\). Registra la interpretación en la etapa 4 del cuaderno.
+
+\captura{04_perfil_plegado.jpg}{Perfil plegado y controles para actualizarlo e interpretarlo.}
+
+\section{5. Evaluación final y comparación con la literatura}
+
+En \textbf{Final review of the work}, resume el procedimiento, la conclusión y sus limitaciones. En \textbf{Comparison with the bibliography}, explica si tus resultados concuerdan con las referencias, en qué difieren y qué observaciones adicionales ayudarían a resolver las dudas.
+
+La tabla de progreso indica qué etapas siguen pendientes. La etapa 4 solo es necesaria si la periodicidad se considera fiable. Cuando termines, abre \textbf{Generate report}, completa los datos del estudiante y del curso y descarga el PDF. Si faltan evidencias, se generará un borrador que enumera las etapas pendientes.
+
+\captura{05_evaluacion_e_informe.jpg}{Progreso del cuaderno y panel para preparar el informe PDF.}
+
+\section*{Notas prácticas}
+
+\begin{itemize}
+  \item Las respuestas del cuaderno se conservan mientras la sesión de la app siga abierta. Descarga el informe antes de cerrar o reiniciar la sesión.
+  \item Si aparece un aviso sobre tiempos no baricéntricos o corrección temporal, tenlo en cuenta: las conclusiones temporales pueden ser solo demostrativas.
+  \item Las extensiones de prewhitening, tomografía y Model Laboratory son voluntarias; elige solo las que puedas justificar.
+\end{itemize}
+
+\vfill
+\noindent\small Interfaz: \href{http://localhost:8501}{Periodicity Workbench local}. Para añadir las capturas, crea una carpeta llamada \texttt{capturas} en Overleaf y sube las cinco imágenes con los nombres indicados en sus pies.
+
+\end{document}

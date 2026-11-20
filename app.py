@@ -940,7 +940,6 @@ def add_bootstrap_errors(
     t: np.ndarray,
     y: np.ndarray,
     dy: np.ndarray,
-    ls: LombScargle,
     peaks: list[PeakSummary],
     n_bootstrap: int,
     local_width: float,
@@ -951,23 +950,36 @@ def add_bootstrap_errors(
         return
     rng = np.random.default_rng(seed)
     n = len(t)
-    for peak in peaks:
-        if "excluded" in peak.kind:
-            continue
+    active_peaks = [peak for peak in peaks if "excluded" not in peak.kind]
+    if not active_peaks:
+        return
+
+    # Fit all selected peaks together so each bootstrap realization is shared
+    # across their local frequency searches.
+    design = np.ones((n, 1 + 2 * len(active_peaks)), dtype=float)
+    local_grids = []
+    for index, peak in enumerate(active_peaks):
+        angular_phase = 2.0 * np.pi * peak.frequency * t
+        design[:, 1 + 2 * index] = np.cos(angular_phase)
+        design[:, 2 + 2 * index] = np.sin(angular_phase)
         low = max(peak.frequency * (1.0 - local_width), 1e-12)
         high = peak.frequency * (1.0 + local_width)
-        local_frequency = np.linspace(low, high, n_local_frequency)
-        model = ls.model(t, peak.frequency)
-        residuals = y - model
-        boot_freq = np.empty(n_bootstrap)
-        for i in range(n_bootstrap):
-            boot_y = model + residuals[rng.integers(0, n, n)]
-            boot_ls = LombScargle(t, boot_y, dy, center_data=True, fit_mean=True)
-            # Bootstrap grids are evenly spaced too. For these shorter grids
-            # Astropy's automatic heuristic may select the O(N*M) backend;
-            # that cost is repeated for every resample and detected peak.
+        local_grids.append(np.linspace(low, high, n_local_frequency))
+
+    weighted_design = design / dy[:, None]
+    model = design @ np.linalg.lstsq(weighted_design, y / dy, rcond=None)[0]
+    residuals = y - model
+    bootstrap_frequencies = np.empty((n_bootstrap, len(active_peaks)), dtype=float)
+    for iteration in range(n_bootstrap):
+        boot_y = model + residuals[rng.integers(0, n, n)]
+        boot_ls = LombScargle(t, boot_y, dy, center_data=True, fit_mean=True)
+        for peak_index, local_frequency in enumerate(local_grids):
+            # Keep each peak's evenly spaced local grid to use the fast backend.
             boot_power = boot_ls.power(local_frequency, method="fast", assume_regular_frequency=True)
-            boot_freq[i] = local_frequency[int(np.argmax(boot_power))]
+            bootstrap_frequencies[iteration, peak_index] = local_frequency[int(np.argmax(boot_power))]
+
+    for peak_index, peak in enumerate(active_peaks):
+        boot_freq = bootstrap_frequencies[:, peak_index]
         boot_period = 1.0 / boot_freq
         peak.frequency_error = float(np.std(boot_freq, ddof=1))
         peak.frequency_p16 = float(np.percentile(boot_freq, 16))
@@ -3739,7 +3751,7 @@ def run_analysis(fields: dict[str, str], file_bytes: bytes, filename: str = "upl
     )
     apply_manual_exclusions(peaks, excluded_periods, exclusion_tolerance)
     peaks.sort(key=lambda peak: peak.power, reverse=True)
-    add_bootstrap_errors(t, y_analysis, dy, ls, peaks, n_bootstrap, bootstrap_width, 1200, seed=12345)
+    add_bootstrap_errors(t, y_analysis, dy, peaks, n_bootstrap, bootstrap_width, 1200, seed=12345)
 
     candidate_peaks = usable_candidate_peaks(peaks)
     primary_for_harmonics = candidate_peaks[0] if candidate_peaks else primary
